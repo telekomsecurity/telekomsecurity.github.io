@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<!-- Meta -->
+	<meta charset="UTF-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+	<meta name="generator" content="Jekyll">
+
+	<title>Telekom Security</title>
+  <meta name="description" content="Telekom Security research and publications">
+
+	<!-- CSS & fonts -->
+	<link rel="stylesheet" href="/css/main.css">
+
+	<!-- RSS -->
+	<link href="/atom.xml" type="application/atom+xml" rel="alternate" title="ATOM Feed" />
+
+  <!-- Favicon -->
+  <link rel="shortcut icon" type="image/png" href="img/favicon.png">
+
+  <meta http-equiv="refresh" content="0; URL=https://telekom-security.github.io">
+
+</head>
+
+
+<body>
+	<div id="wrap">
+	  	
+	  	<!-- Navigation -->
+      
+    
+    <!-- Icon menu -->
+	  <a id="nav-menu">
+	  	<div id="menu"></div>
+	  </a>
+
+      <!-- Header -->
+      
+        <header id="header" class="parent justify-spaceBetween">
+  <div class="inner w100 relative">
+    <span class="f-left">  
+      <a href="/">
+        <h1>
+          <span>Telekom</span> Security
+        </h1>
+      </a>
+    </span>
+    <span id="nav-links" class="absolute right bottom">
+      <!-- Nav pages -->
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+      
+      <!-- Nav links -->
+	    <a href="/index.html">Home</a>
+<a href="/imprint.html">Imprint</a>
+<a href="/disclaimer.html">Disclaimer</a>
+<a href="/privacy-policy.html">Privacy Policy</a>
+<a href="https://security.telekom.com/">About Telekom Security</a>
+
+
+    </span>
+  </div>
+</header>
+
+
+
+
+      
+
+    <!-- Main content -->
+	  <div id="container">
+		  
+		<main>
+
+			<!-- Posts -->
+<ul id="posts">
+
+	
+
+	  <li class="post">
+	  	<h2><a href="/2020/05/smuggling-http-headers-through-reverse-proxies.html">Smuggling HTTP headers through reverse proxies</a></h2>
+      <time datetime="2020-05-15T00:00:00+02:00" class="by-line"> <i>15 May 2020</i> </time>
+	  	<p><p>Under some conditions, it is possible to smuggle HTTP headers through a reverse proxy, even if it was explicitly unset before. This is possible in some cases due to HTTP header normalization and parser differentials. Because HTTP headers are commonly used as way to pass authentication data to the backend (for example in mutual TLS scenarios), this can lead to critical vulnerabilities.</p>
+
+</p>
+        <p><a href="/2020/05/smuggling-http-headers-through-reverse-proxies.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2020/03/forticlient-unquoted-service-path.html">Unquoted Service Path exploit in Fortinet FortiClient</a></h2>
+      <time datetime="2020-03-09T00:00:00+01:00" class="by-line"> <i>09 Mar 2020</i> </time>
+	  	<p><p>FortiClient for Windows prior to 6.2.3 is vulnerable to an unquoted service path vulnerability (CVE-2019-17658). That may allow an attacker to gain elevated privileges via the FortiClientConsole executable service path.</p>
+
+</p>
+        <p><a href="/2020/03/forticlient-unquoted-service-path.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2020/01/junos-space-local-file-inclusion.html">Juniper Junos Space prior to 19.4R1 Local File Inclusion Vulnerability</a></h2>
+      <time datetime="2020-01-31T00:00:00+01:00" class="by-line"> <i>31 Jan 2020</i> </time>
+	  	<p><p>A Local File Inclusion vulnerability (CVE-2020-1611) in Juniper Networks Junos Space allows an attacker to view all files on the target when the device receives malicious HTTP packets.</p>
+
+</p>
+        <p><a href="/2020/01/junos-space-local-file-inclusion.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2019/05/wolfssl-buffer-overflow.html">wolfSSL TLSv1.3 Remote Buffer Overflow</a></h2>
+      <time datetime="2019-05-20T00:00:00+02:00" class="by-line"> <i>20 May 2019</i> </time>
+	  	<p><p>A new critical remote buffer overflow vulnerability (CVE-2019-11873) was discovered in the wolfSSL library (version 4.0.0-stable, http://www.wolfssl.com) by Security Evaluators of Telekom Security with modern fuzzing methods. The vulnerability allows an attacker to overwrite a large part of the RAM of a wolfSSL server with hisdata over the network.</p>
+
+<p><a href="/assets/advisories/20190520_remote-buffer-overflow-wolfssl_CVE-2019-11873.pdf">View the full advisory</a></p>
+</p>
+        <p><a href="/2019/05/wolfssl-buffer-overflow.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2019/03/axtls-buffer-overflow.html">axTLS Remote Buffer Overflow</a></h2>
+      <time datetime="2019-03-22T00:00:00+01:00" class="by-line"> <i>22 Mar 2019</i> </time>
+	  	<p><p>A new critical remote buffer overflow vulnerability (CVE-2019-8981) in the axTLS library for embedded devices (version 2.1.4, <a href="http://axtls.scourceforge.net">http://axtls.scourceforge.net</a> was discovered on 2019 February 20 with modern fuzzing methods, which possibly allows remote code execution. A new fixed version (2.1.5) countering this is now available for download.</p>
+
+<p><a href="/assets/advisories/20190322_remote-buffer-overflow-in-a-axtls.pdf">View the full advisory</a></p>
+</p>
+        <p><a href="/2019/03/axtls-buffer-overflow.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2018/12/webid-multiple-vulnerabilities.html">WeBid Directory Traversal, Blind SQL Injection and XSS</a></h2>
+      <time datetime="2018-12-03T00:00:00+01:00" class="by-line"> <i>03 Dec 2018</i> </time>
+	  	<p><p>Multiple vulnerabilities were identified in version 1.2.2 of the popular “WeBid” open source auction system. Patches for all three vulnerabilities are available in their GitHub, and will be included in the next release.</p>
+
+</p>
+        <p><a href="/2018/12/webid-multiple-vulnerabilities.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2018/07/servicenow-privilege-escalation.html">ServiceNow Glide Scripting injection leading to privilege escalation</a></h2>
+      <time datetime="2018-07-27T00:00:00+02:00" class="by-line"> <i>27 Jul 2018</i> </time>
+	  	<p><p>ServiceNow, an enterprise IT service management solution, is vulnerable to an template
+injection vulnerability, leading to a full privilege escalation.</p>
+
+</p>
+        <p><a href="/2018/07/servicenow-privilege-escalation.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+	  <li class="post">
+	  	<h2><a href="/2018/07/adb-botnet.html">Variant of Satori/Mirai detected attacking public available ADB shells</a></h2>
+      <time datetime="2018-07-10T00:00:00+02:00" class="by-line"> <i>10 Jul 2018</i> </time>
+	  	<p><p>On the 10th of July at 23:30 UTC we noticed an increased traffic on our <a href="http://sicherheitstacho.eu/start/main">blackhole monitoring</a> on TCP port 5555. Upon further analysis, we saw a big chunk of this traffic coming from China, USA and the Dominican Republic. In total we gathered <strong>246.434 packets</strong> from <strong>68.361 unique IPs</strong>. Based on the packet details we gathered, we can assume that the packets were generated by a lot of different devices. In addition, the traffic behavior on port 5555 matches the typicall scan behavior of botnets.</p>
+
+</p>
+        <p><a href="/2018/07/adb-botnet.html">Continue Reading &rarr;</a></p>
+	  </li>
+
+    
+
+</ul>
+
+
+	  </main>
+		
+		  <!-- Pagination links -->
+      
+        <div class="pagination">
+          
+            <span class="page-item">&laquo;</span>
+          
+        
+          
+            
+              <span class="page-item">1</span>
+            
+          
+            
+              <a href="/page2/" class="page-item">2</a>
+            
+          
+        
+          
+            <a href="/page2/" class="page-item">&raquo;</a>
+          
+        </div>
+        
+
+	  </div>
+	    
+	    <!-- Footer -->
+	    <footer><span>Based on Monochrome Jekyll theme</span></footer>
+
+
+	    <!-- Script -->
+      <script src="/js/main.js"></script>	
+
+
+	</div>
+</body>
+</html>

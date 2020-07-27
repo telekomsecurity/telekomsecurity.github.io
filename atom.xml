@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+ <title>Telekom Security</title>
+ <link href="http://telekomsecurity.github.io//atom.xml" rel="self"/>
+ <id>http://telekomsecurity.github.io/</id>
+ <updated>2020-07-23T12:06:24+02:00</updated>
+ <author>
+   <name>Telekom Security</name>
+   <uri></uri>
+   <email></email>
+ </author>
+
+ 
+
+ <entry>
+   <title>Smuggling HTTP headers through reverse proxies</title>
+   <link href="http://telekomsecurity.github.io//2020/05/smuggling-http-headers-through-reverse-proxies.html"/>
+   <id>http://telekomsecurity.github.io//2020/05/smuggling-http-headers-through-reverse-proxies</id>
+   <updated>2020-05-15T00:00:00+02:00</updated>
+   <content type="html">&lt;p&gt;Under some conditions, it is possible to smuggle HTTP headers through a reverse proxy, even if it was explicitly unset before. This is possible in some cases due to HTTP header normalization and parser differentials. Because HTTP headers are commonly used as way to pass authentication data to the backend...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>Unquoted Service Path exploit in Fortinet FortiClient</title>
+   <link href="http://telekomsecurity.github.io//2020/03/forticlient-unquoted-service-path.html"/>
+   <id>http://telekomsecurity.github.io//2020/03/forticlient-unquoted-service-path</id>
+   <updated>2020-03-09T00:00:00+01:00</updated>
+   <content type="html">&lt;p&gt;FortiClient for Windows prior to 6.2.3 is vulnerable to an unquoted service path vulnerability (CVE-2019-17658). That may allow an attacker to gain elevated privileges via the FortiClientConsole executable service path.&lt;/p&gt; &lt;!--more--&gt; &lt;p&gt;Base Score: 9.8&lt;/p&gt; &lt;p&gt;Vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H&lt;/p&gt; &lt;h3 id=&quot;affected-component&quot;&gt;Affected Component&lt;/h3&gt; &lt;p&gt;FortiClient FortiTray&lt;/p&gt; &lt;h3 id=&quot;affected-products&quot;&gt;Affected Products&lt;/h3&gt; &lt;p&gt;FortiClient for Windows Versions 6.2.2 and...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>Juniper Junos Space Local File Inclusion Vulnerability</title>
+   <link href="http://telekomsecurity.github.io//2020/01/junos-space-local-file-inclusion.html"/>
+   <id>http://telekomsecurity.github.io//2020/01/junos-space-local-file-inclusion</id>
+   <updated>2020-01-31T00:00:00+01:00</updated>
+   <content type="html">&lt;p&gt;A Local File Inclusion vulnerability (CVE-2020-1611) in Juniper Networks Junos Space allows an attacker to view all files on the target when the device receives malicious HTTP packets.&lt;/p&gt; &lt;!--more--&gt; &lt;h2 id=&quot;juniper-junos-space-local-file-inclusion&quot;&gt;Juniper Junos Space Local File Inclusion&lt;/h2&gt; &lt;p&gt;Juniper Junos Space prior to 19.4R1 is vulnerable to a local file inclusion vulnerability....</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>wolfSSL TLSv1.3 Remote Buffer Overflow</title>
+   <link href="http://telekomsecurity.github.io//2019/05/wolfssl-buffer-overflow.html"/>
+   <id>http://telekomsecurity.github.io//2019/05/wolfssl-buffer-overflow</id>
+   <updated>2019-05-20T00:00:00+02:00</updated>
+   <content type="html">&lt;p&gt;A new critical remote buffer overflow vulnerability (CVE-2019-11873) was discovered in the wolfSSL library (version 4.0.0-stable, http://www.wolfssl.com) by Security Evaluators of Telekom Security with modern fuzzing methods. The vulnerability allows an attacker to overwrite a large part of the RAM of a wolfSSL server with hisdata over the network.&lt;/p&gt; &lt;p&gt;&lt;a...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>axTLS Remote Buffer Overflow</title>
+   <link href="http://telekomsecurity.github.io//2019/03/axtls-buffer-overflow.html"/>
+   <id>http://telekomsecurity.github.io//2019/03/axtls-buffer-overflow</id>
+   <updated>2019-03-22T00:00:00+01:00</updated>
+   <content type="html">&lt;p&gt;A new critical remote buffer overflow vulnerability (CVE-2019-8981) in the axTLS library for embedded devices (version 2.1.4, &lt;a href=&quot;http://axtls.scourceforge.net&quot;&gt;http://axtls.scourceforge.net&lt;/a&gt; was discovered on 2019 February 20 with modern fuzzing methods, which possibly allows remote code execution. A new fixed version (2.1.5) countering this is now available for download.&lt;/p&gt; &lt;p&gt;&lt;a href=&quot;/assets/advisories/20190322_remote-buffer-overflow-in-a-axtls.pdf&quot;&gt;View the...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>WeBid Directory Traversal, Blind SQL Injection and XSS</title>
+   <link href="http://telekomsecurity.github.io//2018/12/webid-multiple-vulnerabilities.html"/>
+   <id>http://telekomsecurity.github.io//2018/12/webid-multiple-vulnerabilities</id>
+   <updated>2018-12-03T00:00:00+01:00</updated>
+   <content type="html">&lt;p&gt;Multiple vulnerabilities were identified in version 1.2.2 of the popular “WeBid” open source auction system. Patches for all three vulnerabilities are available in their GitHub, and will be included in the next release.&lt;/p&gt; &lt;!--more--&gt; &lt;p&gt;&lt;a href=&quot;/assets/advisories/20181108_WeBid_Multiple_Vulnerabilities.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt; &lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt; Telekom Security security.telekom.com Advisory: WeBid -...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>ServiceNow Glide scripting injection leading to privilege escalation</title>
+   <link href="http://telekomsecurity.github.io//2018/07/servicenow-privilege-escalation.html"/>
+   <id>http://telekomsecurity.github.io//2018/07/servicenow-privilege-escalation</id>
+   <updated>2018-07-27T00:00:00+02:00</updated>
+   <content type="html">&lt;p&gt;ServiceNow, an enterprise IT service management solution, is vulnerable to an template injection vulnerability, leading to a full privilege escalation.&lt;/p&gt; &lt;!--more--&gt; &lt;p&gt;&lt;a href=&quot;/assets/advisories/20180104_ServiceNow_GlideInjection.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt; &lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt; Telekom Security security.telekom.com Advisory: ServiceNow Glide scripting injection leading to privilege escalation Release Date: 2018/07/27 Author: Robin Verton (robin.verton@telekom.de)...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>Satori/Mirai botnet detected</title>
+   <link href="http://telekomsecurity.github.io//2018/07/adb-botnet.html"/>
+   <id>http://telekomsecurity.github.io//2018/07/adb-botnet</id>
+   <updated>2018-07-10T00:00:00+02:00</updated>
+   <content type="html">&lt;p&gt;On the 10th of July at 23:30 UTC we noticed an increased traffic on our &lt;a href=&quot;http://sicherheitstacho.eu/start/main&quot;&gt;blackhole monitoring&lt;/a&gt; on TCP port 5555. Upon further analysis, we saw a big chunk of this traffic coming from China, USA and the Dominican Republic. In total we gathered &lt;strong&gt;246.434 packets&lt;/strong&gt; from &lt;strong&gt;68.361 unique...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>Trovebox - Authentication Bypass, SQLi, SSRF</title>
+   <link href="http://telekomsecurity.github.io//2018/04/trovebox-vulnerabilities.html"/>
+   <id>http://telekomsecurity.github.io//2018/04/trovebox-vulnerabilities</id>
+   <updated>2018-04-30T00:00:00+02:00</updated>
+   <content type="html">&lt;p&gt;Trovebox, a photo sharing and management application, is prone to several critical vulnerabilities. Exploiting is trivial and it is recommended to update to the fixed version from Github.&lt;/p&gt; &lt;!--more--&gt; &lt;p&gt;&lt;a href=&quot;/assets/advisories/20180430_Trovebox.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt; &lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt; Telekom Security security.telekom.com Advisory: Trovebox - Authentication Bypass, SQLi, SSRF Release...</content>
+ </entry>
+
+ 
+
+ <entry>
+   <title>Kaltura Video Platform - Pre-Auth Remote Code Execution (and XSS)</title>
+   <link href="http://telekomsecurity.github.io//2017/09/kaltura-rce.html"/>
+   <id>http://telekomsecurity.github.io//2017/09/kaltura-rce</id>
+   <updated>2017-09-12T00:00:00+02:00</updated>
+   <content type="html">&lt;p&gt;During an interal pentest several critical vulnerabilities could be identified in the latest version of &lt;a href=&quot;https://kaltura.com&quot;&gt;Kaltura Community and Enterprise&lt;/a&gt;. The vulnerabilities were fixed in the latest release 13.2.0.&lt;/p&gt; &lt;p&gt;&lt;strong&gt;Update:&lt;/strong&gt; A proof of concept exploit can be found &lt;a href=&quot;/assets/exploits/kaltura_rce_poc_2017-14143.py&quot;&gt;here&lt;/a&gt;.&lt;/p&gt; &lt;!--more--&gt; &lt;p&gt;&lt;a href=&quot;/assets/advisories/20170912_kaltura-advisory.txt&quot;&gt;View the full advisory&lt;/a&gt;&lt;/p&gt; &lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre...</content>
+ </entry>
+
+ 
+
+</feed>

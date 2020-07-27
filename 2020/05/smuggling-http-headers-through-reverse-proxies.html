@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<!-- Meta -->
+	<meta charset="UTF-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+	<meta name="generator" content="Jekyll">
+
+	<title>Smuggling HTTP headers through reverse proxies</title>
+  <meta name="description" content="Smuggling HTTP headers through reverse proxies">
+
+	<!-- CSS & fonts -->
+	<link rel="stylesheet" href="/css/main.css">
+
+	<!-- RSS -->
+	<link href="/atom.xml" type="application/atom+xml" rel="alternate" title="ATOM Feed" />
+
+  <!-- Favicon -->
+  <link rel="shortcut icon" type="image/png" href="img/favicon.png">
+
+  <meta http-equiv="refresh" content="0; URL=https://telekom-security.github.io/2020/05/smuggling-http-headers-through-reverse-proxies.html">
+
+</head>
+
+
+<body>
+	<div id="wrap">
+	  	
+	  	<!-- Navigation -->
+      
+    
+    <!-- Icon menu -->
+	  <a id="nav-menu">
+	  	<div id="menu"></div>
+	  </a>
+
+      <!-- Header -->
+      
+        <header id="header" class="parent justify-spaceBetween">
+  <div class="inner w100 relative">
+    <span class="f-left">  
+      <a href="/">
+        <h1>
+          <span>Telekom</span> Security
+        </h1>
+      </a>
+    </span>
+    <span id="nav-links" class="absolute right bottom">
+      <!-- Nav pages -->
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+      
+      <!-- Nav links -->
+	    <a href="/index.html">Home</a>
+<a href="/imprint.html">Imprint</a>
+<a href="/disclaimer.html">Disclaimer</a>
+<a href="/privacy-policy.html">Privacy Policy</a>
+<a href="https://security.telekom.com/">About Telekom Security</a>
+
+
+    </span>
+  </div>
+</header>
+
+
+
+
+      
+
+    <!-- Main content -->
+	  <div id="container">
+		  
+		<main>
+
+			<article id="post-page">
+	<h2>Smuggling HTTP headers through reverse proxies</h2>		
+	<time datetime="2020-05-15T00:00:00+02:00" class="by-line">15 May 2020</time>
+	<div class="content">
+
+		<p>Under some conditions, it is possible to smuggle HTTP headers through a reverse proxy, even if it was explicitly unset before. This is possible in some cases due to HTTP header normalization and parser differentials. Because HTTP headers are commonly used as way to pass authentication data to the backend (for example in mutual TLS scenarios), this can lead to critical vulnerabilities.</p>
+
+<!--more-->
+
+<p>In the following post, I will describe some theoretical and practical scenarios and how to abuse them. Some of these methods were used to bypass authentication for critical internal applications.</p>
+
+<p>If you do not want to read the detailed description, there is <a href="#recap">Recap</a> at the end of this post.</p>
+
+<h2 id="client-certificate-authentication-over-a-reverse-proxy">Client certificate authentication over a reverse proxy</h2>
+
+<p>During an audit of an internal platform, I took a deeper look at an authentication method we often use internally. This authentication is done via smartcard and offers a simple way for us to authenticate a user by his email address with a X509 client certificate. Because it’s available to a lot of employees, it is a fast and better way to authenticate than old username plus password.</p>
+
+<p>The process is easy to implement on the first thought. Our internal guidelines, as well as a lot of popular resources on the Internet, use something like this:</p>
+
+<p>1) A reverse proxy in front of the backend does the mutual TLS (mTLS) flow and ensures a valid client certificate.
+2) Some X509 fields like an email address or a full name are extracted from the certificate.
+3) The fields are added as additional headers and the request is forwarded to the backend.
+4) The backend authenticates the user (by the passed fields).</p>
+
+<p>You see what can be a big problem here: Only some headers will separate an attacker from an authentication bypass (or some privilege escalation).</p>
+
+<p>To prevent this, it is usually recommended to <strong>unset headers passed in the original request</strong>.</p>
+
+<p>This is an example configuration:</p>
+
+<div class="language-apache highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">&lt;</span><span class="nl">VirtualHost</span><span class="sr"> *:443</span><span class="p">&gt;
+</span>    <span class="c"># activate HTTPS on the reverse proxy</span>
+    <span class="nc">SSLEngine</span> On
+    <span class="nc">SSLCertificateFile</span>    /etc/apache2/ssl/mycert.crt
+    <span class="nc">SSLCertificateKeyFile</span> /etc/apache2/ssl/mycert.key
+
+    <span class="p">&lt;</span><span class="nl">Location</span><span class="sr"> /auth/cert</span><span class="p">&gt;
+</span>        <span class="c"># activate the client certificate authentication</span>
+        <span class="nc">SSLCACertificateFile</span> /etc/apache2/ssl/client-accepted-ca-chain.crt
+        <span class="nc">SSLVerifyClient</span> require
+        <span class="nc">SSLVerifyDepth</span> 3
+
+        <span class="c"># enrich request with client certificate data</span>
+        <span class="nc">RequestHeader</span> <span class="ss">set</span> SSL_CLIENT_S_DN "%{SSL_CLIENT_S_DN}s"
+
+        <span class="nc">ProxyPass</span>          http://localhost:8080/
+        <span class="nc">ProxyPassReverse</span>   http://localhost:8080/
+    <span class="p">&lt;/</span><span class="nl">Location</span><span class="p">&gt;
+&lt;/</span><span class="nl">VirtualHost</span><span class="p">&gt;
+</span></code></pre></div></div>
+
+<p>So in theory, this looks pretty safe. But as you might have already guessed - it’s not (always). Let us first explore how normalization may result in unexpected behaviour.</p>
+
+<h2 id="normalization-attackers-best-friend">Normalization, attacker’s best friend</h2>
+
+<p>Depending on the combination of reverse proxy, backend software and even framework used, an attacker passed HTTP header will be normalized and may interfere with “filters” which are set in place.</p>
+
+<p>For every following scenario, I will use the following Apache configuration. This will unset/remove the header <code class="language-plaintext highlighter-rouge">CLIENT_VERIFIED</code> and then pass the request to an application running at :1337.</p>
+
+<div class="language-apache highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nc">RequestHeader</span> <span class="ss">unset</span> CLIENT_VERIFIED
+
+<span class="p">&lt;</span><span class="nl">Location</span><span class="sr"> /</span><span class="p">&gt;
+</span>    <span class="nc">ProxyPass</span>          http://localhost:1337/
+    <span class="nc">ProxyPassReverse</span>   http://localhost:1337/
+<span class="p">&lt;/</span><span class="nl">Location</span><span class="p">&gt;
+</span></code></pre></div></div>
+
+<p>Before diving into this, I was a bit surprised that what I tried even nearly worked. As can be read in a lot of posts and documentation, Apache and Nginx will <em>silently drop all headers with underscores</em> in them. However I found some problems with this: This is <strong>not done when requests are passed via ProxyPass on Apache</strong>. This seems to be overlooked by a lot of frameworks which <a href="https://www.djangoproject.com/weblog/2015/jan/13/security/">falsely document this behavior</a>.</p>
+
+<p>The <a href="https://httpd.apache.org/docs/trunk/env.html#setting">apache documentation</a> states that this is happening when HTTP headers are passed via environment variables:</p>
+
+<blockquote>
+  <p>A special case are HTTP headers which are passed to CGI scripts and the like via environment variables (see below). They are converted to uppercase and only dashes are replaced with underscores; if the header contains any other (invalid) character, the whole header is silently dropped</p>
+</blockquote>
+
+<h3 id="apache-and-django-deployed-with-gunicorn">Apache and django (deployed with gunicorn)</h3>
+
+<p>In the backend I’ve setup a simple django application with the following code, which returns all
+headers:</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">index</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="n">headers</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span><span class="s">"{k}:{v}"</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="n">request</span><span class="o">.</span><span class="n">META</span><span class="o">.</span><span class="n">items</span><span class="p">()]</span>
+    <span class="k">return</span> <span class="n">HttpResponse</span><span class="p">(</span><span class="s">'</span><span class="se">\n</span><span class="s">'</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">headers</span><span class="p">))</span>
+</code></pre></div></div>
+
+<p>So with the configuration above, the following request will of course not pass <code class="language-plaintext highlighter-rouge">CLIENT_VERIFIED</code> to the backend, because Apache will unset it before:</p>
+<div class="language-http highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nf">GET</span> <span class="nn">/</span> <span class="k">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="p">:</span> <span class="s">localhost</span>
+<span class="na">CLIENT_VERIFIED</span><span class="p">:</span> <span class="s">pwn@pwn.com</span>
+</code></pre></div></div>
+
+<p>Now let’s take a step back first. How does django/python/gunicorn handle a HTTP request? Python usually does this over <a href="https://wsgi.readthedocs.io/en/latest/what.html">WSGI</a>, a specification describing how a web server communicates with a web application. It’s derived from CGI times. As soon as CGI is (or was) involved, things get a bit strange. Because of how headers were passed in the CGI days as environment variables, there was a problem with hyphens (and underscores) in header names. This led to the decision to normalize these header values:</p>
+
+<blockquote>
+  <p>When HTTP headers are placed into the WSGI environ, they are normalized by converting to uppercase, converting all dashes to underscores, and prepending HTTP_.</p>
+</blockquote>
+
+<p>A header passed as “foo-bar” to a django app is therefore converted/normalized to <code class="language-plaintext highlighter-rouge">HTTP_FOO_BAR</code>. If you add 1 and 1 now, you should see how this will implicate our scenario:</p>
+
+<p><img src="/assets/images/header-smuggling_apache2_django_gunicorn.png" alt="" /></p>
+
+<p>The <code class="language-plaintext highlighter-rouge">unset</code> (or <code class="language-plaintext highlighter-rouge">set</code> to an empty string) in the Apache config is therefore ineffective.</p>
+
+<p>This conflation was already documented in a <a href="https://www.djangoproject.com/weblog/2015/jan/13/security/">security advisory by django</a> some years ago. The mentioned fix (“In order to prevent such attacks, both Nginx and Apache 2.4+ strip all headers containing underscores from incoming requests by default.”) does not happen in a reverse proxied environment. However, even if this would be done, we are not using underscores in our request here, because they are converted to underscores anyway.</p>
+
+<p><strong>Important:</strong> This also works if apache unsets a hyphen header name (like <code class="language-plaintext highlighter-rouge">CLIENT-VERIFIED</code>). You can then just pass the header with an underscore (like <code class="language-plaintext highlighter-rouge">CLIENT_VERIFIED</code>) and django will happily convert it to <code class="language-plaintext highlighter-rouge">HTTP_CLIENT_VERIFIED</code>.</p>
+
+<h3 id="apache-and-flask-deployed-with-gunicorn">Apache and flask (deployed with gunicorn)</h3>
+
+<p>Flask (which makes use of <a href="https://github.com/pallets/werkzeug">werkzeug</a>) has its own way of handling headers (and hyphens). The following code was used (in the flask app):</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">@</span><span class="n">app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s">'/'</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">index</span><span class="p">():</span>
+    <span class="n">headers</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span><span class="s">"{k}:{v}"</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="p">]</span>
+    <span class="n">header_str</span> <span class="o">=</span> <span class="s">'</span><span class="se">\n</span><span class="s">'</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">headers</span><span class="p">)</span>
+    <span class="n">is_authenticated</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">'CLIENT_VERIFIED'</span><span class="p">,</span> <span class="bp">False</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">f</span><span class="s">"{header_str}</span><span class="se">\n\n</span><span class="s">{is_authenticated}"</span>
+</code></pre></div></div>
+
+<p>This code will print out all headers and echo if there is a <code class="language-plaintext highlighter-rouge">CLIENT_VERIFIED</code> value passed (which - based on the Apache config - should not be possible).</p>
+
+<p>Let’s give it a try:</p>
+
+<p>Request:</p>
+<div class="language-http highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nf">GET</span> <span class="nn">/login_cst</span> <span class="k">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="p">:</span> <span class="s">127.0.0.1</span>
+<span class="na">CLIENT_VERIFIED</span><span class="p">:</span> <span class="s">foobar</span>
+</code></pre></div></div>
+
+<p>Response:</p>
+<div class="language-http highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">200</span> <span class="ne">OK</span>
+<span class="na">Date</span><span class="p">:</span> <span class="s">Wed, 22 Apr 2020 18:16:07 GMT</span>
+<span class="na">Server</span><span class="p">:</span> <span class="s">gunicorn/20.0.4</span>
+<span class="na">Content-Type</span><span class="p">:</span> <span class="s">text/html; charset=utf-8</span>
+<span class="na">Content-Length</span><span class="p">:</span> <span class="s">160</span>
+<span class="na">Vary</span><span class="p">:</span> <span class="s">Accept-Encoding</span>
+
+Host:localhost:1337
+X-Forwarded-For:10.0.2.2
+X-Forwarded-Host:127.0.0.1
+X-Forwarded-Server:10.0.2.15
+Connection:Keep-Alive
+
+False
+</code></pre></div></div>
+
+<p>As you can see here, Flask (werkzeug) does its own normalization here, capitalizing each word and converting to hyphens.</p>
+
+<p>Now let’s try to abuse this normalization and bypass the “authentication”:</p>
+
+<p><img src="/assets/images/header-smuggling_apache2_flask_gunicorn.png" alt="" /></p>
+
+<p>You can see here that <code class="language-plaintext highlighter-rouge">is_authenticated</code> returned a value. This is possible because werkzeug <a href="https://github.com/pallets/werkzeug/blob/master/src/werkzeug/datastructures.py#L1358">overwrites</a> the <code class="language-plaintext highlighter-rouge">__getitem__</code> method, replacing hyphens with underscores. This way, our smuggled header is now accessible at <code class="language-plaintext highlighter-rouge">request.headers.get('CLIENT_VERIFIED')</code>. Great success!</p>
+
+<p>I have to admit at this point that one of my own applications I wrote was vulnerable to exactly this attack. The main problem here is that (a) I accepted the auth headers in a middleware and therefore not under a specific path, and that (b) header normalization lead to bypassing of the <code class="language-plaintext highlighter-rouge">unset</code>.</p>
+
+<p><strong>Important:</strong> This method also works the other way around: If Apache unset’s a header like <code class="language-plaintext highlighter-rouge">FOO-BAR</code>, we can just send <code class="language-plaintext highlighter-rouge">FOO_BAR</code> which will be normalized and is then still accessible in flask with <code class="language-plaintext highlighter-rouge">request.headers.get('FOO-BAR')</code>.</p>
+
+<h3 id="apache-and-php">Apache and PHP</h3>
+
+<p>PHP does work the same way as django here, normalizing a <code class="language-plaintext highlighter-rouge">client-verified</code> header and making it available under <code class="language-plaintext highlighter-rouge">$_SERVER['HTTP_CLIENT_VERIFIED']</code>. The backend is not able to distinguish if it was also originally sent as <code class="language-plaintext highlighter-rouge">CLIENT_VERIFIED</code> (from a potential reverse proxy) or directly from the client.</p>
+
+<div class="language-http highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nf">GET</span> <span class="nn">/phpinfo.php</span> <span class="k">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="p">:</span> <span class="s">127.0.0.1</span>
+<span class="na">client-verified</span><span class="p">:</span> <span class="s">pwned@pwned.com</span>
+</code></pre></div></div>
+
+<div class="language-html highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[...]
+<span class="nt">&lt;tr&gt;&lt;td</span> <span class="na">class=</span><span class="s">"e"</span><span class="nt">&gt;</span>$_SERVER['HTTP_CLIENT_VERIFIED']<span class="nt">&lt;/td&gt;&lt;td</span> <span class="na">class=</span><span class="s">"v"</span><span class="nt">&gt;</span>pwned@pwned.com<span class="nt">&lt;/td&gt;&lt;/tr&gt;</span>
+[...]
+</code></pre></div></div>
+
+<h2 id="intentionally-duplicating-headers">Intentionally duplicating headers</h2>
+
+<p>There is also some interesting behaviour when the reverse proxy sets a header (for example <code class="language-plaintext highlighter-rouge">SSL_Test</code>) and the clients chooses a header name which will be the same, after normalization: <code class="language-plaintext highlighter-rouge">SSL-Test</code>. After normalization, this header will be <code class="language-plaintext highlighter-rouge">SSL_TEST</code>.</p>
+
+<p>When doing this with Apache and flask/django, the headers are concatenated - with the client header first:</p>
+
+<div class="language-apache highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">&lt;</span><span class="nl">VirtualHost</span><span class="sr"> *:443</span><span class="p">&gt;
+</span>    <span class="c"># [...]</span>
+    <span class="p">&lt;</span><span class="nl">Location</span><span class="sr"> /</span><span class="p">&gt;
+</span>        <span class="nc">RequestHeader</span> <span class="ss">set</span> SSL_Test "some@user.com"
+
+        <span class="nc">ProxyPass</span> http://localhost:1337/
+        <span class="nc">ProxyPassReverse</span> http://localhost:1337/
+    <span class="p">&lt;/</span><span class="nl">Location</span><span class="p">&gt;
+&lt;/</span><span class="nl">VirtualHost</span><span class="p">&gt;
+</span></code></pre></div></div>
+
+<p>The result (in this example from django):
+<code class="language-plaintext highlighter-rouge">HTTP_SSL_TEST:foobar,some@user.com</code></p>
+
+<p>As you can see, the client value is prepended. While I have to agree that its not very promising in this situation, this may become handy when adding a value to <code class="language-plaintext highlighter-rouge">X-Forwarded-For</code>, <code class="language-plaintext highlighter-rouge">X-Forwarded-Host</code>, etc. which is set by Apache by default:</p>
+
+<p><img src="/assets/images/header-smuggling_apache2_forwarded_for.png" alt="" /></p>
+
+<p>Now let’s take the following nginx configuration, where the result looks a bit more promising:</p>
+
+<div class="language-nginx highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">server</span> <span class="p">{</span>
+    <span class="kn">listen</span> <span class="mi">80</span> <span class="s">default_server</span><span class="p">;</span>
+
+    <span class="kn">location</span> <span class="n">/foo</span> <span class="p">{</span>
+        <span class="kn">proxy_set_header</span> <span class="s">SSL_Test</span> <span class="s">"some@user.com"</span>
+        <span class="s">proxy_pass</span> <span class="s">http://localhost:1337</span>
+    <span class="err">}</span>
+<span class="err">}</span>
+</code></pre></div></div>
+
+<p>The resulting response (flask):</p>
+
+<p><code class="language-plaintext highlighter-rouge">Ssl-Test: some@user.com,foobar</code> (or for django <code class="language-plaintext highlighter-rouge">SSL_TEST: some@user.com,foobar</code>).</p>
+
+<p>A direct match can not be bypassed with this, but you may have success passing some filters. An example could be using a filter to match for a <code class="language-plaintext highlighter-rouge">@corp.com</code> suffix:</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">@</span><span class="n">app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s">"/login"</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">login_certificate</span><span class="p">():</span>
+    <span class="n">email</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s">'SSL_CLIENT_S_DN_Email'</span><span class="p">,</span> <span class="bp">False</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">email</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s">'@corp.com'</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">abort</span><span class="p">(</span><span class="mi">403</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="s">"authenticated"</span>
+</code></pre></div></div>
+
+<p>Sending <code class="language-plaintext highlighter-rouge">@corp.com</code> as a header value now will bypass the above method then, because it will be appended and therefore <code class="language-plaintext highlighter-rouge">endswith</code> returns a success:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>SSL_CLIENT_S_DN_EMAIL: some@user.com,@corp.com
+</code></pre></div></div>
+
+<h2 id="a-real-world-authentication-bypass">A real world authentication bypass</h2>
+
+<p>There was a slightly different scenario on some internal platforms. The authentication configuration differed in a substantial part (to the one I described in the beginning of this article). It looked like this:</p>
+
+<div class="language-apache highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">&lt;</span><span class="nl">VirtualHost</span><span class="sr"> *:443</span><span class="p">&gt;
+</span>    <span class="c"># virtualhost config</span>
+    <span class="c"># [...]</span>
+
+    <span class="p">&lt;</span><span class="nl">Location</span><span class="sr"> /auth/cert/smartcard.xhtml</span><span class="p">&gt;
+</span>        <span class="c"># do client certification stuff</span>
+        <span class="nc">SSLVerifyClient</span> require
+        <span class="nc">SSLVerifyDepth</span>  3
+        <span class="nc">SSLOptions</span> +StrictRequire +StdEnvVars
+
+        <span class="c"># set headers for backend</span>
+        <span class="nc">RequestHeader</span> <span class="ss">set</span> SSL_CLIENT_S_DN_Email "%{SSL_CLIENT_S_DN_Email}s"
+        <span class="nc">RequestHeader</span> <span class="ss">set</span> SSL_CLIENT_S_DN_CN "%{SSL_CLIENT_S_DN_CN}s"
+        <span class="nc">RequestHeader</span> <span class="ss">set</span> SSL_CLIENT_VERIFY "%{SSL_CLIENT_VERIFY}s"
+    <span class="p">&lt;/</span><span class="nl">Location</span><span class="p">&gt;
+</span>
+    <span class="nc">ProxyPass</span>          http://localhost:8443/
+    <span class="nc">ProxyPassReverse</span>   http://localhost:8443/
+<span class="p">&lt;/</span><span class="nl">VirtualHost</span><span class="p">&gt;
+</span></code></pre></div></div>
+
+<p>As you can see, the authentication headers were only set when client authentication was handled (said otherwise: the path matched). The backend application (a Java application running on Tomcat) only accepted this specific headers under the <code class="language-plaintext highlighter-rouge">/auth/cert/smartcard.xhtml</code> path. Example authentication flow:</p>
+
+<ol>
+  <li>User requests <code class="language-plaintext highlighter-rouge">/auth/cert/smartcard.xhtml</code></li>
+  <li>Apache will ensure that the client sends a valid certificate</li>
+  <li>Apache will enrich the original request with authentication information extracted from the certificate and forward it.</li>
+  <li>Backend receives the enriched requests at <code class="language-plaintext highlighter-rouge">/auth/cert/smartcard.xhtml</code></li>
+</ol>
+
+<p>Because an attacker cannot reach the <code class="language-plaintext highlighter-rouge">/auth/cert/smartcard.xhtml</code> directly, it’s not possible to pass the specified <code class="language-plaintext highlighter-rouge">SSL_*</code> headers and fulfill the authentication. Therefore a bypass is not possible. Or is it?</p>
+
+<p>The critical assumption here is that the frontend webserver always <strong>interprets the path the same way the backend does</strong>. If they do not, you may slip through the <code class="language-plaintext highlighter-rouge">Location</code>-block of the reverse proxy check and pass the authentication headers directly to backend.</p>
+
+<p>I remembered some Blackhat talk about <a href="https://i.blackhat.com/us-18/Wed-August-8/us-18-Orange-Tsai-Breaking-Parser-Logic-Take-Your-Path-Normalization-Off-And-Pop-0days-Out-2.pdf">parser logic by Orange Tsai</a> some years ago talking about this and some odd behaviour for Tomcat (which was running here on the backend). A path like <code class="language-plaintext highlighter-rouge">/auth/cert;foo=bar/smartcard.xhtml</code> will be parsed as <code class="language-plaintext highlighter-rouge">/auth/cert/smartcard.xhtml</code>, because foo=bar will be interpreted as a parameter.</p>
+
+<p>Here is the path interpretation of <code class="language-plaintext highlighter-rouge">/auth/cert;foo=bar/smartcard.xhtml</code>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th> </th>
+      <th>Interpreted Path</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Apache</td>
+      <td>/auth/cert;foo=bar/smartcard.xhtml</td>
+    </tr>
+    <tr>
+      <td>Nginx</td>
+      <td>/auth/cert;foo=bar/smartcard.xhtml</td>
+    </tr>
+    <tr>
+      <td>IIS</td>
+      <td>/auth/cert;foo=bar/smartcard.xhtml</td>
+    </tr>
+    <tr>
+      <td>Tomcat</td>
+      <td>/auth/cert/smartcard.xhtml</td>
+    </tr>
+    <tr>
+      <td>Jetty</td>
+      <td>/auth/cert/smartcard.xhtml</td>
+    </tr>
+    <tr>
+      <td>WildFly</td>
+      <td>/auth/cert/smartcard.xhtml</td>
+    </tr>
+    <tr>
+      <td>WebLogic</td>
+      <td>/auth/cert/smartcard.xhtml</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Combining the fact that (a) Apache will not remove our underscore headers with the (b) path normalization behavior, we can successfully bypass the Apache certificate check and directly send the authentication headers to the backend. This will allow an authentication bypass and account takeover.</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>curl <span class="nt">--path-as-is</span> <span class="s1">'https://redacted.telekom.de/auth/cert;foo=bar/smartcard.xhtml'</span> <span class="se">\</span>
+    <span class="nt">-H</span> <span class="s1">'SSL_CLIENT_S_DN_Email: user@email.com'</span> <span class="se">\</span>
+    <span class="nt">-H</span> <span class="s2">"SSL_CLIENT_S_DN_CN: User Name"</span> <span class="se">\</span>
+    <span class="nt">-H</span> <span class="s2">"SSL_CLIENT_VERIFY: SUCCESS"</span>
+</code></pre></div></div>
+
+<p>Don’t be fooled here that only Apache with Tomcat can be vulnerable. I am sure there are other combinations of components where frontend and backend will interpret the path differently. Only a slight difference is in this scenario needed for a full authentication bypass.</p>
+
+<h2 id="recap">Recap</h2>
+
+<ul>
+  <li>In some scenarios, HTTP header names can be spoofed via underscore/dash conflation</li>
+  <li>WSGI frameworks like django or flask assume it’s the reverse proxy’s job to strip out underscore headers</li>
+  <li>Apache <strong>does not</strong> strip out headers with underscores for requests passed via <code class="language-plaintext highlighter-rouge">ProxyPass</code> and some other modules</li>
+  <li>Nginx <strong>does</strong> strip out headers with underscores for requests passed via <code class="language-plaintext highlighter-rouge">proxy_pass</code> (unless <code class="language-plaintext highlighter-rouge">underscores_in_headers</code> is on)</li>
+  <li>If a HTTP header name with hyphens is passed, WSGI-based frameworks and PHP will normalize the header, disallowing the user to distinguish how it was originally passed</li>
+  <li>HTTP headers matching this criteria used in a security-sensitive way can be abused this way to bypass authentication</li>
+  <li>In some cases, path parsing differentials will also lead to an authentication bypass</li>
+</ul>
+
+<p>I did not check every possible combination of components, but for the ones I looked at, I can give this short overview for Apache. Nginx will not pass underscores, but the hyphen/underscore conversion stays the same:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th> </th>
+      <th>Allows underscores</th>
+      <th>Converts <code class="language-plaintext highlighter-rouge">_</code> to <code class="language-plaintext highlighter-rouge">-</code></th>
+      <th>Converts <code class="language-plaintext highlighter-rouge">-</code> to <code class="language-plaintext highlighter-rouge">_</code></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>apache → django</td>
+      <td>✓</td>
+      <td> </td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>apache → flask</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td><sup>1</sup></td>
+    </tr>
+    <tr>
+      <td>apache → php</td>
+      <td> </td>
+      <td> </td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>apache → tomcat<sup>2</sup></td>
+      <td>✓</td>
+      <td> </td>
+      <td> </td>
+    </tr>
+    <tr>
+      <td>apache + php module</td>
+      <td> </td>
+      <td> </td>
+      <td>✓</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><sup>1</sup> hyphens are not converted, but all hyphen headers are still accessible with underscores.</p>
+
+<p><sup>2</sup> path parsing differentials dangerous</p>
+
+<h3 id="nginx-and-possibly-other-reverse-proxies">Nginx (and possibly other reverse proxies)</h3>
+
+<p>As you might have noticed, this writeup mainly focuses on Apache in reverse proxy scenarios. This is due to the fact that nginx will strip out all underscore headers by default.</p>
+
+<p>Some interesting behaviour for nginx occurs when headers are set twice (due to normalization). While passing underscore headers do not work for nginx, headers with hyphens may still be converted at the backend.</p>
+
+<p>If a reverse proxy does not strip out underscore headers, the same techniques as used for Apache can be applied. The only other reverse proxy I tested was <a href="https://caddyserver.com/">Caddy</a>, which also does not strip underscore headers.</p>
+
+<h2 id="severity-and-impact">Severity and Impact</h2>
+
+<p>As described above, this does not mean that every Apache-mTLS-as-a-reverse-proxy scenario is problematic. The main point of this post is to highlight unexpected behavior when dealing with specific headers and configurations. Some combinations and configuration will be problematic, some won’t. For the Apache+Tomcat example, this can lead to a critical vulnerability. This is also of course not always the case.</p>
+
+<p>In the scenario described in the beginning of this post, where Apache is used with a WSGI-based component and <code class="language-plaintext highlighter-rouge">ProxyPass</code>, mTLS is used on the root level. This lowers the impact from an authentication bypass to an account takeover, because an attacker is not able to bypass the initial mTLS.</p>
+
+<p>When authentication headers are only accepted at a specific path, a potential attacker is required to use a path differential to fully smuggle headers.</p>
+
+<p>While this posts tries to give an example for a theoretic mTLS authentication scenarios, there are a few other interesting headers which might be smuggled: <code class="language-plaintext highlighter-rouge">X-Forwarded-For</code>, <code class="language-plaintext highlighter-rouge">X-Forwarded-Host</code>, <code class="language-plaintext highlighter-rouge">X-Real-Ip</code>, etc. If the backend application for examples adds authentication based on the IP address, an attacker might use one of the tricks above to get his own header value to be passed to the backend.</p>
+
+<p>To vulnerability caused by a combination of components and the impact highly depends on the components in use and their configuration.</p>
+
+<h2 id="recommendations">Recommendations</h2>
+
+<p>There are a lot of components and scenarios which can have devastating effects. However, we came to the following measures which prevent all scenarios we can think of:</p>
+
+<ol>
+  <li><strong>Always</strong> unset/clear the authentication headers at root level (and not just in the <code class="language-plaintext highlighter-rouge">Location</code> block, which is relevant for authentication).</li>
+  <li><strong>Do not use</strong> underscores or hyphens in security-sensitive HTTP header names, unless you specifically checked if and how normalization is done and all variations are stripped out at the reverse proxy level.</li>
+  <li><strong>Consider using</strong> a secret in an authentication block (like <code class="language-plaintext highlighter-rouge">&lt;Location&gt;</code> in Apache) which is checked against in the backend. This way, even if the attacker is able to abuse a parser differential like with Apache and Tomcat, the attacker does not know the secret and the backend is able to notice the forgery.</li>
+</ol>
+
+<p>‒ <strong>Robin Verton</strong> (<a href="https://twitter.com/RobinVerton">@robinverton</a>). Big thanks also to <strong>Simon Peters</strong>, who researched this topic with me.</p>
+
+		
+	</div>
+</article>
+
+
+
+	  </main>
+		
+		  <!-- Pagination links -->
+      
+
+	  </div>
+	    
+	    <!-- Footer -->
+	    <footer><span>Based on Monochrome Jekyll theme</span></footer>
+
+
+	    <!-- Script -->
+      <script src="/js/main.js"></script>	
+
+
+	</div>
+</body>
+</html>

